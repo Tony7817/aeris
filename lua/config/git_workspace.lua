@@ -1199,32 +1199,12 @@ local function diff_status_summary(file)
   return #labels > 0 and table.concat(labels, " • ") or "changed"
 end
 
-local function format_hunk_header(line)
-  local before, after, context = line:match("^@@ %-(.-) %+(.-) @@%s*(.*)$")
-  if not before or not after then
-    return line
-  end
-
-  local header = string.format("Change %s -> %s", before, after)
-  if context and context ~= "" then
-    header = header .. "  " .. context
-  end
-
-  return header
-end
-
 local function build_diff_view(file, raw_lines)
-  local lines = {
-    file.old_path and file.old_path ~= file.path and (file.old_path .. " -> " .. file.path) or file.path,
-    diff_status_summary(file),
-    "",
-  }
-  local highlights = {
-    { line = 1, group = "Title" },
-    { line = 2, group = "Comment" },
-  }
+  local lines = {}
+  local highlights = {}
   local hunks = {}
   local scrollbar_marks = {}
+  local pending_hunk = false
 
   local function add_line(text, group, scrollbar_type)
     table.insert(lines, text)
@@ -1264,22 +1244,37 @@ local function build_diff_view(file, raw_lines)
     elseif line:match("^Binary files ") then
       add_line("Binary file changed", "Comment")
     elseif line:match("^@@") then
-      local line_number = add_line(format_hunk_header(line), "DiffChange")
-      table.insert(hunks, line_number)
+      pending_hunk = true
     elseif line:sub(1, 1) == "+" then
-      add_line("+ " .. line:sub(2), "DiffAdd", "GitAdd")
+      local line_number = add_line(line:sub(2), "DiffAdd", "GitAdd")
+      if pending_hunk then
+        table.insert(hunks, line_number)
+        pending_hunk = false
+      end
     elseif line:sub(1, 1) == "-" then
-      add_line("- " .. line:sub(2), "DiffDelete", "GitDelete")
+      local line_number = add_line(line:sub(2), "DiffDelete", "GitDelete")
+      if pending_hunk then
+        table.insert(hunks, line_number)
+        pending_hunk = false
+      end
     elseif line:sub(1, 1) == " " then
-      add_line("  " .. line:sub(2), nil)
+      local line_number = add_line(line:sub(2), nil)
+      if pending_hunk then
+        table.insert(hunks, line_number)
+        pending_hunk = false
+      end
     elseif line == "\\ No newline at end of file" then
       add_line("  [No newline at end of file]", "Comment")
     elseif line ~= "" then
-      add_line(line, "Comment")
+      local line_number = add_line(line, "Comment")
+      if pending_hunk then
+        table.insert(hunks, line_number)
+        pending_hunk = false
+      end
     end
   end
 
-  if #lines == 3 then
+  if #lines == 0 then
     add_line("No textual diff available.", "Comment")
   end
 
@@ -1289,6 +1284,25 @@ local function build_diff_view(file, raw_lines)
     hunks = hunks,
     scrollbar_marks = scrollbar_marks,
   }
+end
+
+local function apply_diff_code_syntax(buf, win, repo, file)
+  if not is_valid_buf(buf) or not is_valid_win(win) then
+    return
+  end
+
+  local source_path = file.old_path or file.path
+  local absolute_path = source_path and join(repo.path, source_path) or nil
+  local filetype = absolute_path and vim.filetype.match({ filename = absolute_path }) or nil
+  if not filetype or filetype == "" then
+    return
+  end
+
+  window_call(win, function()
+    vim.bo[buf].filetype = filetype
+    vim.bo[buf].syntax = filetype
+    pcall(vim.treesitter.start, buf, filetype)
+  end)
 end
 
 local function repo_base_ref(repo_path)
@@ -1457,8 +1471,8 @@ local function open_diff(repo, file)
     nil,
     false
   )
-  vim.bo[buf].filetype = "erwin-git-diff"
   api.nvim_win_set_buf(win, buf)
+  apply_diff_code_syntax(buf, win, repo, file)
   configure_main_window(win)
   apply_diff_highlights(buf, diff_view)
   apply_diff_scrollbar_marks(buf, win, diff_view)
