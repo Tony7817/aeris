@@ -137,11 +137,6 @@ return {
         highlights = require("catppuccin.special.bufferline").get_theme(),
         options = {
           always_show_bufferline = true,
-          diagnostics = "nvim_lsp",
-          diagnostics_indicator = function(count, level)
-            local icon = level:match("error") and "!" or "?"
-            return " " .. icon .. count
-          end,
           hover = {
             enabled = true,
             delay = 120,
