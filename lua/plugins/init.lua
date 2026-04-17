@@ -376,6 +376,10 @@ return {
     dependencies = {
       "nvim-lua/plenary.nvim",
       "nvim-tree/nvim-web-devicons",
+      {
+        "nvim-telescope/telescope-fzf-native.nvim",
+        build = "make",
+      },
     },
     opts = {
       defaults = {
@@ -392,6 +396,14 @@ return {
           "%.venv/",
           "%.tmp/",
           "DerivedData/",
+        },
+      },
+      extensions = {
+        fzf = {
+          fuzzy = true,
+          override_file_sorter = true,
+          override_generic_sorter = true,
+          case_mode = "smart_case",
         },
       },
       pickers = {
@@ -446,6 +458,7 @@ return {
       end
 
       require("telescope").setup(opts)
+      pcall(require("telescope").load_extension, "fzf")
     end,
   },
   {
