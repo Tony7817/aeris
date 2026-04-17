@@ -7,6 +7,8 @@ local function goto_git_change(direction)
   end
 
   if vim.wo.diff then
+    local command = direction == "next" and "]c" or "[c"
+    vim.cmd("normal! " .. command)
     return
   end
 
