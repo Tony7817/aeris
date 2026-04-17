@@ -198,6 +198,10 @@ local function set_repo_action_state(repo_path, values)
   return repo_state
 end
 
+local function reset_repo_action_state(repo_path)
+  state.repo_actions[repo_path] = {}
+end
+
 local function set_sidebar_focus(repo_path, target)
   state.sidebar_focus = {
     repo_path = repo_path,
@@ -800,6 +804,7 @@ function M.render()
     add_sidebar_line(lines, {
       kind = "repo",
       repo = repo,
+      focus_target = "repo",
     }, string.format(" %s %s  %s  %s", expanded and "▾" or "▸", repo.name, repo.branch, repo.summary))
 
     if expanded then
@@ -871,6 +876,23 @@ function M.render()
       end
     end
   end
+end
+
+local function restore_placeholder_view()
+  if not is_valid_tab(state.tabpage) then
+    return
+  end
+
+  local win = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
+  if not win then
+    return
+  end
+
+  close_extra_main_windows(win)
+  state.main_win = win
+  state.current_diff = nil
+  api.nvim_win_set_buf(win, placeholder_buf())
+  configure_main_window(win)
 end
 
 local function show_action_output(title, body_lines, filetype)
@@ -1093,14 +1115,10 @@ local function run_repo_action(repo, action_name)
         busy_focus = false,
         error = false,
         info = false,
-        push_available = true,
       })
-      set_sidebar_focus(repo.path, "push")
-      show_action_output(
-        "Push Result · " .. repo.name,
-        vim.split(trim(push_result.stdout or "Push completed"), "\n", { trimempty = true }),
-        ""
-      )
+      reset_repo_action_state(repo.path)
+      set_sidebar_focus(repo.path, "repo")
+      restore_placeholder_view()
       schedule_sidebar_refresh()
     end)
   end
