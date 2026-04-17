@@ -16,6 +16,7 @@ local state = {
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
+local diff_namespace = api.nvim_create_namespace("erwin_git_workspace_diff")
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -642,6 +643,122 @@ local function diff_lines(output)
   return lines
 end
 
+local function diff_status_summary(file)
+  local labels = {}
+
+  if file.renamed then
+    table.insert(labels, "renamed")
+  elseif file.copied then
+    table.insert(labels, "copied")
+  elseif file.deleted then
+    table.insert(labels, "deleted")
+  elseif file.untracked then
+    table.insert(labels, "new file")
+  elseif file.added then
+    table.insert(labels, "added")
+  elseif file.code:find("M", 1, true) then
+    table.insert(labels, "modified")
+  end
+
+  if file.conflicted then
+    table.insert(labels, "conflicted")
+  end
+
+  return #labels > 0 and table.concat(labels, " • ") or "changed"
+end
+
+local function format_hunk_header(line)
+  local before, after, context = line:match("^@@ %-(.-) %+(.-) @@%s*(.*)$")
+  if not before or not after then
+    return line
+  end
+
+  local header = string.format("Change %s -> %s", before, after)
+  if context and context ~= "" then
+    header = header .. "  " .. context
+  end
+
+  return header
+end
+
+local function build_diff_view(file, raw_lines)
+  local lines = {
+    file.old_path and file.old_path ~= file.path and (file.old_path .. " -> " .. file.path) or file.path,
+    diff_status_summary(file),
+    "",
+  }
+  local highlights = {
+    { line = 1, group = "Title" },
+    { line = 2, group = "Comment" },
+  }
+  local hunks = {}
+  local scrollbar_marks = {}
+
+  local function add_line(text, group, scrollbar_type)
+    table.insert(lines, text)
+    local line_number = #lines
+
+    if group then
+      table.insert(highlights, { line = line_number, group = group })
+    end
+
+    if scrollbar_type then
+      table.insert(scrollbar_marks, {
+        line = line_number - 1,
+        text = "▏",
+        type = scrollbar_type,
+        level = 1,
+      })
+    end
+
+    return line_number
+  end
+
+  for _, line in ipairs(raw_lines) do
+    if
+      line:match("^diff %-%-git ")
+      or line:match("^index ")
+      or line:match("^--- ")
+      or line:match("^%+%+%+ ")
+      or line:match("^old mode ")
+      or line:match("^new mode ")
+      or line:match("^new file mode ")
+      or line:match("^deleted file mode ")
+      or line:match("^similarity index ")
+      or line:match("^rename from ")
+      or line:match("^rename to ")
+    then
+      -- Drop raw git metadata. The view should focus on the code changes.
+    elseif line:match("^Binary files ") then
+      add_line("Binary file changed", "Comment")
+    elseif line:match("^@@") then
+      local line_number = add_line(format_hunk_header(line), "DiffChange")
+      table.insert(hunks, line_number)
+    elseif line:sub(1, 1) == "+" then
+      add_line("+ " .. line:sub(2), "DiffAdd", "GitAdd")
+    elseif line:sub(1, 1) == "-" then
+      add_line("- " .. line:sub(2), "DiffDelete", "GitDelete")
+    elseif line:sub(1, 1) == " " then
+      add_line("  " .. line:sub(2), nil)
+    elseif line == "\\ No newline at end of file" then
+      add_line("  [No newline at end of file]", "Comment")
+    elseif line ~= "" then
+      add_line(line, "Comment")
+    end
+  end
+
+  if #lines == 3 then
+    add_line("No textual diff available.", "Comment")
+  end
+
+  return {
+    lines = lines,
+    highlights = highlights,
+    hunks = hunks,
+    scrollbar_marks = scrollbar_marks,
+  }
+end
+
 local function repo_base_ref(repo_path)
   local head = run_git({ "git", "rev-parse", "--verify", "HEAD" }, repo_path)
   if head then
@@ -684,16 +801,30 @@ local function unified_diff_output(repo, file)
   return run_git(args, repo.path)
 end
 
-local function diff_hunks(lines)
-  local hunks = {}
+local function apply_diff_highlights(buf, diff_view)
+  api.nvim_buf_clear_namespace(buf, diff_namespace, 0, -1)
 
-  for line_number, line in ipairs(lines) do
-    if line:match("^@@") then
-      table.insert(hunks, line_number)
-    end
+  for _, item in ipairs(diff_view.highlights or {}) do
+    api.nvim_buf_add_highlight(buf, diff_namespace, item.group, item.line - 1, 0, -1)
+  end
+end
+
+local function apply_diff_scrollbar_marks(buf, win, diff_view)
+  local ok_utils, scrollbar_utils = pcall(require, "scrollbar.utils")
+  if not ok_utils then
+    return
   end
 
-  return hunks
+  local scrollbar_marks = scrollbar_utils.get_scrollbar_marks(buf)
+  scrollbar_marks.erwin_git_workspace = diff_view.scrollbar_marks or {}
+  scrollbar_utils.set_scrollbar_marks(buf, scrollbar_marks)
+
+  local ok_scrollbar, scrollbar = pcall(require, "scrollbar")
+  if ok_scrollbar and is_valid_win(win) then
+    vim.api.nvim_win_call(win, function()
+      scrollbar.render()
+    end)
+  end
 end
 
 local function jump_to_hunk(win, hunks, direction)
@@ -749,35 +880,61 @@ local function open_diff(repo, file)
   state.main_win = win
 
   local output, err = unified_diff_output(repo, file)
-  local lines
+  local diff_view
   if output and output ~= "" then
-    lines = diff_lines(output)
+    diff_view = build_diff_view(file, diff_lines(output))
   elseif err and err ~= "" then
-    lines = {
-      "Unable to render diff for " .. file.path,
-      "",
-      err,
+    diff_view = {
+      lines = {
+        file.path,
+        "diff unavailable",
+        "",
+        "Unable to render diff for " .. file.path,
+        err,
+      },
+      highlights = {
+        { line = 1, group = "Title" },
+        { line = 2, group = "Comment" },
+        { line = 4, group = "Comment" },
+        { line = 5, group = "DiagnosticError" },
+      },
+      hunks = {},
+      scrollbar_marks = {},
     }
   else
-    lines = {
-      "No textual diff available for " .. file.path,
+    diff_view = {
+      lines = {
+        file.path,
+        diff_status_summary(file),
+        "",
+        "No textual diff available.",
+      },
+      highlights = {
+        { line = 1, group = "Title" },
+        { line = 2, group = "Comment" },
+        { line = 4, group = "Comment" },
+      },
+      hunks = {},
+      scrollbar_marks = {},
     }
   end
 
   local buf = create_scratch_buffer(
     string.format("git-workspace://%s/%s.diff", repo.name, file.path),
-    lines,
+    diff_view.lines,
     nil,
     false
   )
-  vim.bo[buf].filetype = "diff"
+  vim.bo[buf].filetype = "erwin-git-diff"
   api.nvim_win_set_buf(win, buf)
   configure_main_window(win)
+  apply_diff_highlights(buf, diff_view)
+  apply_diff_scrollbar_marks(buf, win, diff_view)
 
   state.current_diff = {
     file_path = file.path,
     buf = buf,
-    hunks = diff_hunks(lines),
+    hunks = diff_view.hunks,
     win = win,
   }
   api.nvim_set_current_win(win)
