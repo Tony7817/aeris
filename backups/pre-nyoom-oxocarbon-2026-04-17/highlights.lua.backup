@@ -1,0 +1,128 @@
+local M = {}
+
+local palette = {
+  bg = "#24292E",
+  keyword = "#ec619c",
+  func = "#b392f0",
+  variable = "#6bb7ff",
+  go_variable = "#b392f0",
+  string = "#8acaff",
+  bracket_alt = "#ec619c",
+  terminal_fg = "#ffffff",
+}
+
+function M.apply_theme(hl)
+  local p = palette
+
+  hl.Normal = { bg = p.bg }
+  hl.NormalNC = { bg = p.bg }
+  hl.NormalFloat = { bg = p.bg }
+  hl.FloatBorder = { bg = p.bg }
+  hl.SignColumn = { bg = p.bg }
+  hl.EndOfBuffer = { bg = p.bg }
+  hl.FoldColumn = { bg = p.bg }
+  hl.CursorLineNr = { bg = p.bg }
+  hl.Terminal = { fg = p.terminal_fg }
+
+  hl.Keyword = { fg = p.keyword }
+  hl.Statement = { fg = p.keyword }
+  hl.Conditional = { fg = p.keyword }
+  hl.Repeat = { fg = p.keyword }
+  hl.Exception = { fg = p.keyword }
+  hl.Boolean = { fg = p.keyword }
+  hl.Constant = { fg = p.keyword }
+
+  hl.Function = { fg = p.func }
+  hl.Type = { fg = p.func }
+
+  hl.Identifier = { fg = p.variable }
+  hl.String = { fg = p.string }
+
+  hl["@keyword"] = { fg = p.keyword }
+  hl["@keyword.function"] = { fg = p.keyword }
+  hl["@keyword.import"] = { fg = p.string }
+  hl["@keyword.return"] = { fg = p.keyword }
+  hl["@keyword.type"] = { fg = p.keyword }
+  hl["@boolean"] = { fg = p.keyword }
+  hl["@constant"] = { fg = p.keyword }
+  hl["@constant.builtin"] = { fg = p.keyword }
+
+  hl["@function"] = { fg = p.func }
+  hl["@function.builtin"] = { fg = p.func }
+  hl["@function.call"] = { fg = p.func }
+  hl["@method"] = { fg = p.func }
+  hl["@method.call"] = { fg = p.func }
+  hl["@type"] = { fg = p.func }
+  hl["@type.builtin"] = { fg = p.func }
+
+  hl["@variable"] = { fg = p.variable }
+  hl["@variable.parameter"] = { fg = p.variable }
+  hl["@variable.member"] = { fg = p.go_variable }
+  hl["@property"] = { fg = p.go_variable }
+
+  hl["@string"] = { fg = p.string }
+  hl["@string.special"] = { fg = p.string }
+  hl["@module"] = { fg = p.string }
+  hl["@namespace"] = { fg = p.string }
+
+  hl["@punctuation.bracket"] = { fg = p.func }
+
+  -- Built-in Go syntax groups are kept as a fallback when treesitter is not active.
+  hl.goBuiltins = { fg = p.keyword }
+  hl.goConst = { fg = p.keyword }
+  hl.goConstants = { fg = p.keyword }
+  hl.goDeclaration = { fg = p.keyword }
+  hl.goDeclType = { fg = p.keyword }
+  hl.goImport = { fg = p.string }
+  hl.goImportString = { fg = p.string }
+  hl.goPackage = { fg = p.keyword }
+  hl.goType = { fg = p.func }
+  hl.goTypeName = { fg = p.func }
+  hl.goFunction = { fg = p.func }
+  hl.goFunctionCall = { fg = p.func }
+  hl.goMethodCall = { fg = p.func }
+  hl.goVarAssign = { fg = p.go_variable }
+  hl.goVarDefs = { fg = p.go_variable }
+  hl.goField = { fg = p.go_variable }
+  hl.goReceiver = { fg = p.go_variable }
+end
+
+function M.apply_runtime()
+  local p = palette
+  local set = vim.api.nvim_set_hl
+
+  local groups = {
+    DiagnosticInfo = { fg = p.terminal_fg },
+    DiagnosticWarn = { fg = p.func },
+    MatchParen = { fg = p.func, bold = true },
+    RainbowDelimiterViolet = { fg = p.func },
+    RainbowDelimiterPink = { fg = p.bracket_alt },
+    ["@string.special.path"] = { fg = p.string },
+    ["@module.go"] = { fg = p.string },
+    ["@namespace.go"] = { fg = p.string },
+    ["@lsp.type.function"] = { fg = p.func },
+    ["@lsp.type.function.go"] = { fg = p.func },
+    ["@lsp.type.method"] = { fg = p.func },
+    ["@lsp.type.method.go"] = { fg = p.func },
+    ["@lsp.type.type"] = { fg = p.func },
+    ["@lsp.type.type.go"] = { fg = p.func },
+    ["@lsp.type.namespace"] = { fg = p.string },
+    ["@lsp.type.namespace.go"] = { fg = p.string },
+    ["@lsp.type.variable"] = { fg = p.variable },
+    ["@lsp.type.variable.go"] = { fg = p.go_variable },
+    ["@lsp.type.parameter"] = { fg = p.variable },
+    ["@lsp.type.parameter.go"] = { fg = p.variable },
+    ["@lsp.type.property"] = { fg = p.go_variable },
+    ["@lsp.type.property.go"] = { fg = p.go_variable },
+    ["@lsp.type.keyword"] = { fg = p.keyword },
+    ["@lsp.type.keyword.go"] = { fg = p.keyword },
+    ["@lsp.type.string"] = { fg = p.string },
+    ["@lsp.type.string.go"] = { fg = p.string },
+  }
+
+  for name, spec in pairs(groups) do
+    set(0, name, spec)
+  end
+end
+
+return M

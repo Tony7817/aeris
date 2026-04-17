@@ -1,0 +1,715 @@
+local function workspace_name()
+  local cwd = vim.fn.getcwd()
+  if cwd == nil or cwd == "" then
+    return "[no-cwd]"
+  end
+
+  local name = vim.fs.basename(cwd)
+  return name ~= "" and name or cwd
+end
+
+local function shorten_blame_summary(summary, max_chars)
+  summary = vim.trim(summary or "")
+  if summary == "" then
+    return "No commit summary"
+  end
+
+  max_chars = max_chars or 40
+  if vim.fn.strchars(summary) <= max_chars then
+    return summary
+  end
+
+  return vim.fn.strcharpart(summary, 0, max_chars - 1) .. "…"
+end
+
+local function format_current_line_blame(_, blame_info)
+  return {
+    {
+      string.format(" %s • %s ", blame_info.author, shorten_blame_summary(blame_info.summary, 44)),
+      "GitSignsCurrentLineBlame",
+    },
+  }
+end
+
+local function show_in_bufferline(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  local filetype = vim.bo[bufnr].filetype
+  local buftype = vim.bo[bufnr].buftype
+
+  if name == "" then
+    return false
+  end
+
+  if vim.startswith(name, "git://") or vim.startswith(name, "git-workspace://") then
+    return false
+  end
+
+  if filetype == "NvimTree" or filetype == "erwin-terminals" or filetype == "erwin-git-workspace" or filetype == "qf" then
+    return false
+  end
+
+  if buftype ~= "" then
+    return false
+  end
+
+  return true
+end
+
+local function buffer_last_used(buffer)
+  local target = type(buffer) == "table" and (buffer.id or buffer.bufnr or buffer.ordinal) or buffer
+  local info = vim.fn.getbufinfo(target)[1]
+  return info and info.lastused or 0
+end
+
+return {
+  {
+    "catppuccin/nvim",
+    name = "catppuccin",
+    lazy = false,
+    priority = 1000,
+    config = function()
+      require("catppuccin").setup({
+        flavour = "mocha",
+        background = {
+          light = "latte",
+          dark = "mocha",
+        },
+      })
+      vim.opt.background = "dark"
+      vim.cmd.colorscheme("catppuccin")
+    end,
+  },
+  {
+    "nvim-tree/nvim-web-devicons",
+    lazy = true,
+  },
+  {
+    "nvim-lualine/lualine.nvim",
+    dependencies = { "nvim-tree/nvim-web-devicons" },
+    opts = {
+      options = {
+        theme = "auto",
+        globalstatus = true,
+        section_separators = "",
+        component_separators = "|",
+      },
+      sections = {
+        lualine_a = { "mode" },
+        lualine_b = {
+          workspace_name,
+          "branch",
+        },
+        lualine_c = { "filename" },
+        lualine_x = { "encoding", "fileformat", "filetype" },
+        lualine_y = { "progress" },
+        lualine_z = { "location" },
+      },
+    },
+  },
+  {
+    "akinsho/bufferline.nvim",
+    version = "*",
+    dependencies = { "nvim-tree/nvim-web-devicons" },
+    opts = function()
+      return {
+        highlights = require("catppuccin.special.bufferline").get_theme(),
+        options = {
+          always_show_bufferline = true,
+          diagnostics = "nvim_lsp",
+          diagnostics_indicator = function(count, level)
+            local icon = level:match("error") and "!" or "?"
+            return " " .. icon .. count
+          end,
+          hover = {
+            enabled = true,
+            delay = 120,
+            reveal = { "close" },
+          },
+          max_name_length = 28,
+          max_prefix_length = 18,
+          separator_style = "thin",
+          show_buffer_close_icons = false,
+          show_close_icon = false,
+          sort_by = function(buffer_a, buffer_b)
+            return buffer_last_used(buffer_a) > buffer_last_used(buffer_b)
+          end,
+          custom_filter = show_in_bufferline,
+          offsets = {
+            {
+              filetype = "NvimTree",
+              text = "Files",
+              highlight = "Directory",
+              text_align = "left",
+              separator = true,
+            },
+          },
+        },
+      }
+    end,
+  },
+  {
+    "folke/which-key.nvim",
+    event = "VeryLazy",
+    opts = {
+      preset = "helix",
+      delay = 300,
+      spec = {
+        { "<leader>b", group = "Buffers" },
+        { "<leader>c", group = "Code" },
+        { "<leader>f", group = "Find" },
+        { "<leader>g", group = "Git" },
+        { "<leader>t", group = "Terminal" },
+      },
+    },
+  },
+  {
+    "numToStr/Comment.nvim",
+    opts = {},
+  },
+  {
+    "windwp/nvim-autopairs",
+    event = "InsertEnter",
+    opts = {},
+  },
+  {
+    "nvim-tree/nvim-tree.lua",
+    dependencies = { "nvim-tree/nvim-web-devicons" },
+    opts = {
+      actions = {
+        open_file = {
+          quit_on_open = false,
+          resize_window = false,
+        },
+      },
+      filters = {
+        dotfiles = false,
+      },
+      git = {
+        ignore = false,
+      },
+      hijack_directories = {
+        enable = true,
+        auto_open = false,
+      },
+      hijack_cursor = true,
+      renderer = {
+        group_empty = true,
+        full_name = false,
+        highlight_git = true,
+        root_folder_label = false,
+        indent_markers = {
+          enable = true,
+        },
+      },
+      sync_root_with_cwd = true,
+      update_focused_file = {
+        enable = true,
+        update_root = true,
+      },
+      view = {
+        preserve_window_proportions = false,
+        side = "left",
+        signcolumn = "yes",
+        width = {
+          min = 22,
+          max = 22,
+          padding = 0,
+        },
+      },
+    },
+  },
+  {
+    "akinsho/toggleterm.nvim",
+    version = "*",
+    lazy = false,
+    opts = {
+      direction = "horizontal",
+      close_on_exit = false,
+      persist_size = false,
+      persist_mode = true,
+      shade_terminals = false,
+      start_in_insert = true,
+      size = function()
+        return math.max(12, math.floor(vim.o.lines * 0.22))
+      end,
+    },
+  },
+  {
+    "lewis6991/gitsigns.nvim",
+    event = { "BufReadPre", "BufNewFile" },
+    opts = {
+      current_line_blame = true,
+      current_line_blame_opts = {
+        delay = 0,
+        use_focus = true,
+        virt_text_pos = "eol",
+      },
+      current_line_blame_formatter = format_current_line_blame,
+      current_line_blame_formatter_nc = " Not committed yet ",
+    },
+  },
+  {
+    "nvim-lua/plenary.nvim",
+    lazy = true,
+  },
+  {
+    "sindrets/diffview.nvim",
+    cmd = {
+      "DiffviewOpen",
+      "DiffviewClose",
+      "DiffviewFileHistory",
+      "DiffviewFocusFiles",
+      "DiffviewToggleFiles",
+      "DiffviewRefresh",
+    },
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+    },
+    opts = {},
+  },
+  {
+    "nvim-telescope/telescope.nvim",
+    branch = "0.1.x",
+    cmd = "Telescope",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-tree/nvim-web-devicons",
+    },
+    opts = {
+      defaults = {
+        prompt_prefix = "> ",
+        selection_caret = "> ",
+        sorting_strategy = "ascending",
+        layout_config = {
+          prompt_position = "top",
+        },
+        file_ignore_patterns = {
+          "%.git/",
+          "node_modules/",
+          "dist/",
+          "%.venv/",
+          "%.tmp/",
+          "DerivedData/",
+        },
+      },
+      pickers = {
+        find_files = {
+          hidden = true,
+        },
+      },
+    },
+    config = function(_, opts)
+      local ok, ts_parsers = pcall(require, "nvim-treesitter.parsers")
+      if ok and ts_parsers.ft_to_lang == nil then
+        ts_parsers.ft_to_lang = function(filetype)
+          return vim.treesitter.language.get_lang(filetype) or filetype
+        end
+      end
+      if ok and ts_parsers.get_parser == nil then
+        ts_parsers.get_parser = function(bufnr, lang)
+          return vim.treesitter.get_parser(bufnr, lang)
+        end
+      end
+
+      if package.loaded["nvim-treesitter.configs"] == nil then
+        package.preload["nvim-treesitter.configs"] = function()
+          local modules = {
+            highlight = {
+              additional_vim_regex_highlighting = false,
+            },
+          }
+
+          return {
+            get_module = function(name)
+              return modules[name] or {}
+            end,
+            is_enabled = function(name, lang, bufnr)
+              if name ~= "highlight" then
+                return false
+              end
+
+              return pcall(vim.treesitter.get_parser, bufnr, lang)
+            end,
+            setup = function(user_modules)
+              if type(user_modules) ~= "table" then
+                return
+              end
+
+              for name, module_opts in pairs(user_modules) do
+                modules[name] = vim.tbl_deep_extend("force", modules[name] or {}, module_opts)
+              end
+            end,
+          }
+        end
+      end
+
+      require("telescope").setup(opts)
+    end,
+  },
+  {
+    "nvim-treesitter/nvim-treesitter",
+    lazy = false,
+    build = ":TSUpdate",
+    opts = {
+      ensure_installed = {
+        "bash",
+        "css",
+        "dockerfile",
+        "go",
+        "gomod",
+        "gosum",
+        "gotmpl",
+        "html",
+        "javascript",
+        "json",
+        "lua",
+        "markdown",
+        "markdown_inline",
+        "proto",
+        "python",
+        "query",
+        "regex",
+        "sql",
+        "swift",
+        "toml",
+        "tsx",
+        "typescript",
+        "vim",
+        "vimdoc",
+        "vue",
+        "yaml",
+      },
+    },
+    config = function(_, opts)
+      local treesitter = require("nvim-treesitter")
+
+      treesitter.setup({
+        install_dir = vim.fn.stdpath("data") .. "/site",
+      })
+
+      local installed = {}
+      for _, lang in ipairs(treesitter.get_installed("parsers")) do
+        installed[lang] = true
+      end
+
+      local missing = {}
+      for _, lang in ipairs(opts.ensure_installed) do
+        if not installed[lang] then
+          table.insert(missing, lang)
+        end
+      end
+
+      if #missing > 0 then
+        vim.schedule(function()
+          pcall(treesitter.install, missing, { summary = true })
+        end)
+      end
+    end,
+  },
+  {
+    "hrsh7th/nvim-cmp",
+    event = "InsertEnter",
+    dependencies = {
+      "L3MON4D3/LuaSnip",
+      "saadparwaiz1/cmp_luasnip",
+      "rafamadriz/friendly-snippets",
+      "hrsh7th/cmp-nvim-lsp",
+      "hrsh7th/cmp-buffer",
+      "hrsh7th/cmp-path",
+    },
+    config = function()
+      local cmp = require("cmp")
+      local luasnip = require("luasnip")
+
+      require("luasnip.loaders.from_vscode").lazy_load()
+
+      cmp.setup({
+        snippet = {
+          expand = function(args)
+            luasnip.lsp_expand(args.body)
+          end,
+        },
+        completion = {
+          completeopt = "menu,menuone,noinsert",
+        },
+        window = {
+          completion = cmp.config.window.bordered(),
+          documentation = cmp.config.window.bordered(),
+        },
+        mapping = cmp.mapping.preset.insert({
+          ["<C-Space>"] = cmp.mapping.complete(),
+          ["<CR>"] = cmp.mapping.confirm({ select = true }),
+          ["<Tab>"] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_next_item()
+              return
+            end
+
+            if luasnip.expand_or_locally_jumpable() then
+              luasnip.expand_or_jump()
+              return
+            end
+
+            fallback()
+          end, { "i", "s" }),
+          ["<S-Tab>"] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_prev_item()
+              return
+            end
+
+            if luasnip.locally_jumpable(-1) then
+              luasnip.jump(-1)
+              return
+            end
+
+            fallback()
+          end, { "i", "s" }),
+        }),
+        sources = cmp.config.sources({
+          { name = "nvim_lsp" },
+          { name = "luasnip" },
+          { name = "path" },
+        }, {
+          { name = "buffer" },
+        }),
+      })
+    end,
+  },
+  {
+    "folke/lazydev.nvim",
+    ft = "lua",
+    opts = {
+      library = {
+        { path = "${3rd}/luv/library", words = { "vim%.uv" } },
+      },
+    },
+  },
+  {
+    "mason-org/mason.nvim",
+    cmd = "Mason",
+    opts = {
+      ui = {
+        border = "rounded",
+      },
+    },
+  },
+  {
+    "mason-org/mason-lspconfig.nvim",
+    dependencies = { "mason-org/mason.nvim" },
+    opts = {
+      automatic_enable = false,
+      ensure_installed = {
+        "bashls",
+        "gopls",
+        "jsonls",
+        "lua_ls",
+        "marksman",
+        "pyright",
+        "sqls",
+        "vtsls",
+        "vue_ls",
+        "yamlls",
+      },
+    },
+  },
+  {
+    "neovim/nvim-lspconfig",
+    event = { "BufReadPre", "BufNewFile" },
+    dependencies = {
+      "folke/lazydev.nvim",
+      "hrsh7th/cmp-nvim-lsp",
+      "mason-org/mason.nvim",
+      "mason-org/mason-lspconfig.nvim",
+    },
+    config = function()
+      local capabilities = require("cmp_nvim_lsp").default_capabilities(
+        vim.lsp.protocol.make_client_capabilities()
+      )
+
+      vim.diagnostic.config({
+        severity_sort = true,
+        float = {
+          border = "rounded",
+          source = "if_many",
+        },
+      })
+
+      local function on_attach(client, bufnr)
+        local disable_formatting = {
+          jsonls = true,
+          vtsls = true,
+          vue_ls = true,
+          yamlls = true,
+        }
+
+        if disable_formatting[client.name] then
+          client.server_capabilities.documentFormattingProvider = false
+          client.server_capabilities.documentRangeFormattingProvider = false
+        end
+
+        if client:supports_method("textDocument/inlayHint", bufnr) then
+          pcall(vim.lsp.inlay_hint.enable, true, { bufnr = bufnr })
+        end
+      end
+
+      local vue_plugin_path = vim.fn.stdpath("data")
+        .. "/mason/packages/vue-language-server/node_modules/@vue/language-server"
+      local vue_plugin = nil
+      if vim.uv.fs_stat(vue_plugin_path) then
+        vue_plugin = {
+          configNamespace = "typescript",
+          languages = { "vue" },
+          location = vue_plugin_path,
+          name = "@vue/typescript-plugin",
+        }
+      end
+
+      local servers = {
+        bashls = {},
+        gopls = {
+          settings = {
+            gopls = {
+              analyses = {
+                shadow = true,
+                unusedparams = true,
+                unusedwrite = true,
+              },
+              gofumpt = true,
+              hints = {
+                assignVariableTypes = true,
+                compositeLiteralFields = true,
+                compositeLiteralTypes = true,
+                constantValues = true,
+                functionTypeParameters = true,
+                parameterNames = true,
+                rangeVariableTypes = true,
+              },
+              staticcheck = true,
+              usePlaceholders = true,
+            },
+          },
+        },
+        jsonls = {},
+        lua_ls = {
+          settings = {
+            Lua = {
+              completion = {
+                callSnippet = "Replace",
+              },
+              diagnostics = {
+                globals = { "vim" },
+              },
+              telemetry = {
+                enable = false,
+              },
+              workspace = {
+                checkThirdParty = false,
+              },
+            },
+          },
+        },
+        marksman = {},
+        pyright = {},
+        sqls = {},
+        vtsls = {
+          filetypes = {
+            "javascript",
+            "javascriptreact",
+            "typescript",
+            "typescriptreact",
+            "vue",
+          },
+          settings = {
+            vtsls = {
+              tsserver = {
+                globalPlugins = vue_plugin and { vue_plugin } or {},
+              },
+            },
+          },
+        },
+        vue_ls = {},
+        yamlls = {
+          settings = {
+            yaml = {
+              keyOrdering = false,
+            },
+          },
+        },
+      }
+
+      for name, config in pairs(servers) do
+        config.capabilities = vim.tbl_deep_extend("force", {}, capabilities, config.capabilities or {})
+        config.on_attach = on_attach
+        vim.lsp.config(name, config)
+        vim.lsp.enable(name)
+      end
+
+      if vim.fn.executable("sourcekit-lsp") == 1 then
+        vim.lsp.config("sourcekit", {
+          capabilities = capabilities,
+          on_attach = on_attach,
+        })
+        vim.lsp.enable("sourcekit")
+      end
+    end,
+  },
+  {
+    "stevearc/conform.nvim",
+    event = { "BufWritePre" },
+    cmd = { "ConformInfo" },
+    opts = {
+      notify_on_error = true,
+      format_on_save = function(bufnr)
+        local enabled = {
+          bash = true,
+          go = true,
+          javascript = true,
+          javascriptreact = true,
+          json = true,
+          jsonc = true,
+          lua = true,
+          markdown = true,
+          python = true,
+          sh = true,
+          sql = true,
+          typescript = true,
+          typescriptreact = true,
+          vue = true,
+          yaml = true,
+          zsh = true,
+        }
+
+        if not enabled[vim.bo[bufnr].filetype] then
+          return nil
+        end
+
+        return {
+          timeout_ms = 2000,
+          lsp_fallback = true,
+        }
+      end,
+      formatters_by_ft = {
+        go = { "goimports", "gofumpt" },
+        javascript = { "prettierd", "prettier" },
+        javascriptreact = { "prettierd", "prettier" },
+        json = { "prettierd", "prettier" },
+        jsonc = { "prettierd", "prettier" },
+        lua = { "stylua" },
+        markdown = { "prettierd", "prettier" },
+        python = { "ruff_format", "black" },
+        sh = { "shfmt" },
+        sql = { "sql_formatter" },
+        typescript = { "prettierd", "prettier" },
+        typescriptreact = { "prettierd", "prettier" },
+        vue = { "prettierd", "prettier" },
+        yaml = { "prettierd", "prettier" },
+        zsh = { "shfmt" },
+      },
+    },
+  },
+}
