@@ -186,12 +186,14 @@ local function ensure_buffer_highlighting(bufnr)
     vim.bo[bufnr].syntax = filetype
   end
 
-  vim.api.nvim_exec_autocmds("FileType", {
-    buffer = bufnr,
-    modeline = false,
-  })
+  vim.api.nvim_buf_call(bufnr, function()
+    vim.api.nvim_exec_autocmds("FileType", {
+      buffer = bufnr,
+      modeline = false,
+    })
 
-  pcall(vim.treesitter.start, bufnr)
+    pcall(vim.treesitter.start)
+  end)
 end
 
 local function apply_ui_highlights()
