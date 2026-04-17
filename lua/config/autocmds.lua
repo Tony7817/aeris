@@ -201,6 +201,25 @@ local function apply_ui_highlights()
   local end_of_buffer = vim.api.nvim_get_hl(0, { name = "EndOfBuffer", link = false })
   local normal_bg = normal.bg
   local normal_fg = normal.fg
+  local vscode = {
+    bracket1 = "#b392f0",
+    bracket2 = "#ec619c",
+    terminal_fg = "#ffffff",
+    warning = "#C792EA",
+    func = "#b392f0",
+    variable = "#6bb7ff",
+    string = "#8acaff",
+    keyword = "#ec619c",
+    type = "#b392f0",
+    constant = "#ec619c",
+    go_variable = "#b392f0",
+  }
+
+  local function set_many(groups, spec)
+    for _, group_name in ipairs(groups) do
+      vim.api.nvim_set_hl(0, group_name, spec)
+    end
+  end
 
   vim.api.nvim_set_hl(0, "WinSeparator", { fg = "#585b70", bg = normal_bg })
   vim.api.nvim_set_hl(0, "VertSplit", { link = "WinSeparator" })
@@ -212,8 +231,8 @@ local function apply_ui_highlights()
   local opened_file = vim.api.nvim_get_hl(0, { name = "NvimTreeOpenedFile", link = false })
   local popup_bg = opened_file.fg or 0x89B4FA
   vim.api.nvim_set_hl(0, "NvimTreeNamePopup", { fg = normal_bg, bg = popup_bg, bold = true })
-  vim.api.nvim_set_hl(0, "TerminalNormal", { bg = "#181825" })
-  vim.api.nvim_set_hl(0, "TerminalNormalNC", { bg = "#11111b" })
+  vim.api.nvim_set_hl(0, "TerminalNormal", { fg = vscode.terminal_fg, bg = "#181825" })
+  vim.api.nvim_set_hl(0, "TerminalNormalNC", { fg = vscode.terminal_fg, bg = "#11111b" })
   vim.api.nvim_set_hl(0, "TerminalCursorLine", { bg = "#313244" })
   vim.api.nvim_set_hl(0, "ScrollbarHandle", { bg = "#585b70", fg = "#585b70" })
   vim.api.nvim_set_hl(0, "ScrollbarCursor", { bg = normal_bg, fg = "#89b4fa" })
@@ -224,6 +243,52 @@ local function apply_ui_highlights()
   vim.api.nvim_set_hl(0, "ScrollbarGitChangeHandle", { bg = "#a6e3a1", fg = "#a6e3a1" })
   vim.api.nvim_set_hl(0, "ScrollbarGitDelete", { bg = normal_bg, fg = "#f38ba8" })
   vim.api.nvim_set_hl(0, "ScrollbarGitDeleteHandle", { bg = "#f38ba8", fg = "#f38ba8" })
+  vim.api.nvim_set_hl(0, "RainbowDelimiterAeris1", { fg = vscode.bracket1 })
+  vim.api.nvim_set_hl(0, "RainbowDelimiterAeris2", { fg = vscode.bracket2 })
+  vim.api.nvim_set_hl(0, "MatchParen", { fg = vscode.bracket1, bold = true, underline = false, bg = nil })
+
+  set_many({ "Function", "@function", "@function.call", "@function.builtin", "@method", "@method.call", "@constructor", "@lsp.type.function", "@lsp.type.method" }, {
+    fg = vscode.func,
+  })
+  set_many({ "Identifier", "@variable", "@variable.member", "@variable.parameter", "@property", "@field", "@lsp.type.variable", "@lsp.type.parameter", "@lsp.type.property" }, {
+    fg = vscode.variable,
+  })
+  set_many({ "String", "Character", "@string", "@string.documentation", "@string.escape", "@string.special", "@string.special.path" }, {
+    fg = vscode.string,
+  })
+  set_many({ "Keyword", "Conditional", "Repeat", "Statement", "@keyword", "@keyword.function", "@keyword.conditional", "@keyword.repeat", "@keyword.return", "@lsp.type.keyword" }, {
+    fg = vscode.keyword,
+  })
+  set_many({ "Type", "Structure", "Typedef", "@type", "@type.builtin", "@lsp.type.type", "@lsp.type.class", "@lsp.type.struct", "@lsp.type.interface", "@module", "@namespace", "@lsp.type.namespace" }, {
+    fg = vscode.type,
+  })
+  set_many({ "Constant", "Boolean", "Number", "Float", "@constant", "@constant.builtin", "@boolean", "@number" }, {
+    fg = vscode.constant,
+  })
+  set_many({ "Include", "@keyword.import", "@include" }, {
+    fg = vscode.string,
+  })
+
+  set_many({ "goImport", "goImportString" }, {
+    fg = vscode.string,
+  })
+  set_many({ "goPackage", "goVar", "goConst", "goDeclaration", "goTypeDecl", "goDeclType" }, {
+    fg = vscode.keyword,
+  })
+  set_many({ "goType", "goTypeName", "goTypeConstructor" }, {
+    fg = vscode.type,
+  })
+  set_many({ "goVarDefs", "goVarAssign", "@variable.go" }, {
+    fg = vscode.go_variable,
+  })
+  vim.api.nvim_set_hl(0, "DiagnosticWarn", { fg = vscode.warning })
+  vim.api.nvim_set_hl(0, "DiagnosticSignWarn", { fg = vscode.warning })
+  vim.api.nvim_set_hl(0, "DiagnosticVirtualTextWarn", { fg = vscode.warning })
+  vim.api.nvim_set_hl(0, "DiagnosticFloatingWarn", { fg = vscode.warning })
+  vim.api.nvim_set_hl(0, "DiagnosticInfo", { fg = vscode.terminal_fg })
+  vim.api.nvim_set_hl(0, "DiagnosticSignInfo", { fg = vscode.terminal_fg })
+  vim.api.nvim_set_hl(0, "DiagnosticVirtualTextInfo", { fg = vscode.terminal_fg })
+  vim.api.nvim_set_hl(0, "DiagnosticFloatingInfo", { fg = vscode.terminal_fg })
 end
 
 local function jump_to_implementation_or_definition()
