@@ -88,6 +88,24 @@ return {
     lazy = true,
   },
   {
+    "MeanderingProgrammer/render-markdown.nvim",
+    ft = { "markdown" },
+    cmd = { "RenderMarkdown" },
+    dependencies = {
+      "nvim-treesitter/nvim-treesitter",
+      "nvim-tree/nvim-web-devicons",
+    },
+    opts = {
+      file_types = { "markdown" },
+      render_modes = { "n", "c", "t" },
+      completions = {
+        lsp = {
+          enabled = true,
+        },
+      },
+    },
+  },
+  {
     "nvim-lualine/lualine.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     opts = {
