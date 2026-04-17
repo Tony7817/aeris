@@ -698,6 +698,15 @@ return {
         gopls = {
           settings = {
             gopls = {
+              directoryFilters = {
+                "-.git",
+                "-.cache",
+                "-**/.cache",
+                "-**/node_modules",
+                "-**/dist",
+                "-**/build",
+                "-**/tmp",
+              },
               analyses = {
                 shadow = true,
                 unusedparams = true,

@@ -11,14 +11,13 @@ Aeris 是一套偏现代 IDE 工作流的 Neovim 配置。
 
 ## 特性
 
-- `catppuccin` 主题
-- 左侧固定窄文件树
-- 顶部 buffer tab 栏
-- 底部 terminal + terminal 列表
+- 文件树支持
+- 顶部 buffer tab 栏支持
+- 底部多 terminal 支持
 - 多仓库 Git workspace
-- `gr` 引用面板，左侧引用列表，右侧代码片段预览
-- 右侧细滚动条，显示当前位置和 Git 变更标记
+- 代码跳转，代码提示，代码引用跳转
 - LSP / Treesitter / 格式化 / 补全
+- Git支持，Codex生成commit message
 
 ## 系统要求
 
@@ -147,91 +146,91 @@ Ctrl-o
 
 ### 通用
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `Esc` | 清除搜索高亮 |
-| `Space w` | 保存当前文件 |
-| `Space q` | 关闭当前窗口 |
+| 快捷键    | 作用            |
+| --------- | --------------- |
+| `Esc`     | 清除搜索高亮    |
+| `Space w` | 保存当前文件    |
+| `Space q` | 关闭当前窗口    |
 | `Space Q` | 强制退出 Neovim |
 
 ### 文件与搜索
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `Space e` | 显示 / 隐藏文件树 |
-| `Space E` | 聚焦文件树 |
-| `Space ff` | 查找文件 |
-| `Space fg` | 全局搜索文本 |
-| `Space fb` | 打开 buffer 列表 |
-| `Space fr` | 打开最近文件列表 |
-| `Space fd` | 打开诊断列表 |
+| 快捷键     | 作用              |
+| ---------- | ----------------- |
+| `Space e`  | 显示 / 隐藏文件树 |
+| `Space E`  | 聚焦文件树        |
+| `Space ff` | 查找文件          |
+| `Space fg` | 全局搜索文本      |
+| `Space fb` | 打开 buffer 列表  |
+| `Space fr` | 打开最近文件列表  |
+| `Space fd` | 打开诊断列表      |
 
 ### 文件 Tab / Buffer
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `Tab` | 切到下一个文件 tab |
-| `Shift-Tab` | 切到上一个文件 tab |
+| 快捷键                 | 作用                       |
+| ---------------------- | -------------------------- |
+| `Tab`                  | 切到下一个文件 tab         |
+| `Shift-Tab`            | 切到上一个文件 tab         |
 | `Space 1` 到 `Space 9` | 跳到第 1 到第 9 个文件 tab |
-| `Space bd` | 关闭当前 buffer |
+| `Space bd`             | 关闭当前 buffer            |
 
 ### 窗口切换
 
-| 快捷键 | 作用 |
-| --- | --- |
+| 快捷键     | 作用         |
+| ---------- | ------------ |
 | `Option-h` | 切到左侧窗口 |
 | `Option-j` | 切到下方窗口 |
 | `Option-k` | 切到上方窗口 |
 | `Option-l` | 切到右侧窗口 |
-| `Ctrl-h` | 切到左侧窗口 |
-| `Ctrl-j` | 切到下方窗口 |
-| `Ctrl-k` | 切到上方窗口 |
-| `Ctrl-l` | 切到右侧窗口 |
+| `Ctrl-h`   | 切到左侧窗口 |
+| `Ctrl-j`   | 切到下方窗口 |
+| `Ctrl-k`   | 切到上方窗口 |
+| `Ctrl-l`   | 切到右侧窗口 |
 
 ### Terminal
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `Space tt` | 新建 terminal |
+| 快捷键     | 作用                      |
+| ---------- | ------------------------- |
+| `Space tt` | 新建 terminal             |
 | `Space tl` | 聚焦 / 切换 terminal 列表 |
-| `Esc Esc` | terminal 回到 Normal 模式 |
+| `Esc Esc`  | terminal 回到 Normal 模式 |
 
 ### Git
 
-| 快捷键 | 作用 |
-| --- | --- |
+| 快捷键     | 作用                |
+| ---------- | ------------------- |
 | `Space gw` | 打开工作区 Git 面板 |
-| `Space gd` | 打开 `diffview` |
-| `Space gh` | 查看当前文件历史 |
-| `Space gq` | 关闭 `diffview` |
-| `Space gx` | 退出 Git 工作区 |
-| `]h` | 下一处 Git 修改 |
-| `[h` | 上一处 Git 修改 |
+| `Space gd` | 打开 `diffview`     |
+| `Space gh` | 查看当前文件历史    |
+| `Space gq` | 关闭 `diffview`     |
+| `Space gx` | 退出 Git 工作区     |
+| `]h`       | 下一处 Git 修改     |
+| `[h`       | 上一处 Git 修改     |
 
 ### LSP / 代码导航
 
 以下键位只在 LSP attach 到当前文件后可用。
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `<F12>` | 优先跳实现，否则跳定义 |
-| `gd` | 跳到定义 |
-| `gr` | 查看引用 |
-| `gI` | 跳到实现 |
-| `K` | 查看悬浮文档 |
-| `Space ds` | 文档符号列表 |
-| `Space ca` | Code Action |
-| `Space rn` | 重命名符号 |
-| `Space cf` | 格式化当前文件 |
-| `Ctrl-o` | 回到上一个跳转点 |
-| `Ctrl-i` | 前进到下一个跳转点 |
+| 快捷键     | 作用                   |
+| ---------- | ---------------------- |
+| `<F12>`    | 优先跳实现，否则跳定义 |
+| `gd`       | 跳到定义               |
+| `gr`       | 查看引用               |
+| `gI`       | 跳到实现               |
+| `K`        | 查看悬浮文档           |
+| `Space ds` | 文档符号列表           |
+| `Space ca` | Code Action            |
+| `Space rn` | 重命名符号             |
+| `Space cf` | 格式化当前文件         |
+| `Ctrl-o`   | 回到上一个跳转点       |
+| `Ctrl-i`   | 前进到下一个跳转点     |
 
 ### 诊断
 
-| 快捷键 | 作用 |
-| --- | --- |
-| `[d` | 上一个诊断 |
-| `]d` | 下一个诊断 |
+| 快捷键     | 作用           |
+| ---------- | -------------- |
+| `[d`       | 上一个诊断     |
+| `]d`       | 下一个诊断     |
 | `Space cd` | 当前行诊断浮窗 |
 
 ## 目录结构
