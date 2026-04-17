@@ -611,6 +611,8 @@ local function configure_main_window(win)
   vim.wo[win].foldcolumn = "0"
   vim.wo[win].foldenable = false
   vim.wo[win].foldmethod = "manual"
+  vim.wo[win].number = true
+  vim.wo[win].relativenumber = false
   vim.wo[win].wrap = false
 
   window_call(win, function()
