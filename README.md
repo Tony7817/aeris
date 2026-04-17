@@ -1,78 +1,80 @@
 # Aeris
 
-Aeris 是一套偏现代 IDE 工作流的 Neovim 配置。
+[中文文档](./README.zh-CN.md)
 
-目标很简单：
+Aeris is a modern IDE-style Neovim configuration focused on being usable immediately after cloning.
 
-- clone 下来就能启动
-- 首次启动自动安装插件
-- 首次启动自动安装常用 LSP / formatter
-- 左侧文件树、顶部文件 tab、底部 terminal、工作区 Git 面板开箱即用
+Goals:
 
-## 特性
+- clone and launch with minimal setup
+- install plugins automatically on first start
+- install common LSP servers and formatters automatically on first start
+- provide a ready-to-use layout with a file tree, top tabs, terminal panel, and workspace Git panel
 
-- 文件树支持
-- 顶部 buffer tab 栏支持
-- 底部多 terminal 支持
-- 多仓库 Git workspace
-- 代码跳转，代码提示，代码引用跳转
-- LSP / Treesitter / 格式化 / 补全
-- Git支持，Codex自动生成commit message
-- markdown 展示支持
+## Features
 
-## 系统要求
+- file tree
+- top buffer tab bar
+- bottom multi-terminal workflow
+- multi-repo Git workspace panel
+- code navigation, hover, references, and rename
+- LSP, Treesitter, formatting, and completion
+- Git workflow with Codex-generated commit messages
+- Markdown rendering support
 
-基础要求：
+## Requirements
+
+Base requirements:
 
 - Neovim `>= 0.12`
 - `git`
 - `ripgrep`
-- 终端使用 Nerd Font
+- a terminal configured with a Nerd Font
 
-为了让语言工具真正开箱即用，建议装上：
+Recommended for language tooling:
 
 - `node`
 - `python3`
 - `go`
 
-## 安装
+## Installation
 
-### 方式一：直接 clone 到 `~/.config/nvim`
+### Option 1: clone directly into `~/.config/nvim`
 
 ```bash
-git clone <your-repo-url> ~/.config/nvim
+git clone https://github.com/Tony7817/aeris.git ~/.config/nvim
 nvim
 ```
 
-### 方式二：仓库放别处，再链接到 `~/.config/nvim`
+### Option 2: clone elsewhere and symlink to `~/.config/nvim`
 
 ```bash
-git clone <your-repo-url> ~/Code/Aeris
+git clone https://github.com/Tony7817/aeris.git ~/Code/Aeris
 cd ~/Code/Aeris
 ./bin/install.sh
 nvim
 ```
 
-`bin/install.sh` 会：
+`bin/install.sh` will:
 
-- 备份已有的 `~/.config/nvim`
-- 把当前仓库软链接到 `~/.config/nvim`
+- back up an existing `~/.config/nvim`
+- symlink the current repo to `~/.config/nvim`
 
-## 首次启动
+## First Launch
 
-首次打开 `nvim` 时，会自动：
+The first time you open `nvim`, Aeris will automatically:
 
 1. bootstrap `lazy.nvim`
-2. 安装插件
-3. 安装 Mason 管理的 LSP / formatter / CLI 工具
+2. install plugins
+3. install Mason-managed LSP servers, formatters, and CLI tools
 
-如果你想手动安装或重装工具：
+To install or reinstall Mason tools manually:
 
 ```vim
 :MasonToolsInstall
 ```
 
-如果你想看插件或工具状态：
+To inspect plugin and tool status:
 
 ```vim
 :Lazy
@@ -80,166 +82,167 @@ nvim
 :checkhealth
 ```
 
-## 日常用法
+## Daily Usage
 
-### 打开项目
+### Open a project
 
 ```bash
 cd /path/to/project
 nvim .
 ```
 
-默认布局：
+Default layout:
 
-- 左侧：文件树
-- 右侧：文件内容
-- 顶部：最近打开的文件 tab
+- left: file tree
+- right: file contents
+- top: recently used file tabs
 
-### 常见工作流
+### Common workflow
 
-找文件：
+Find a file:
 
 ```text
 Space ff
 ```
 
-全局搜代码：
+Search text globally:
 
 ```text
 Space fg
 ```
 
-打开 terminal：
+Open a terminal:
 
 ```text
 Space tt
 ```
 
-打开 Git workspace：
+Open the Git workspace:
 
 ```text
 Space gw
 ```
 
-跳定义 / 看引用：
+Go to definition / find references:
 
 ```text
 gd
 gr
 ```
 
-从跳转处返回：
+Jump back after navigation:
 
 ```text
 Ctrl-o
 ```
 
-## Leader 键
+## Leader Key
 
-本配置的 `leader` 是空格。
+The `leader` key is set to `Space`.
 
-所以：
+That means:
 
-- `Space ff` 表示先按空格，再按 `f`，再按 `f`
-- `Space gw` 表示先按空格，再按 `g`，再按 `w`
+- `Space ff` means press `Space`, then `f`, then `f`
+- `Space gw` means press `Space`, then `g`, then `w`
 
-## 快捷键 Map
+## Keymap Reference
 
-### 通用
+### General
 
-| 快捷键    | 作用            |
-| --------- | --------------- |
-| `Esc`     | 清除搜索高亮    |
-| `Space w` | 保存当前文件    |
-| `Space q` | 关闭当前窗口    |
-| `Space Q` | 强制退出 Neovim |
+| Key | Action |
+| --- | --- |
+| `Esc` | Clear search highlight |
+| `Space w` | Save current file |
+| `Space q` | Close current window |
+| `Space Q` | Force quit Neovim |
 
-### 文件与搜索
+### Files and Search
 
-| 快捷键     | 作用              |
-| ---------- | ----------------- |
-| `Space e`  | 显示 / 隐藏文件树 |
-| `Space E`  | 聚焦文件树        |
-| `Space ff` | 查找文件          |
-| `Space fg` | 全局搜索文本      |
-| `Space fb` | 打开 buffer 列表  |
-| `Space fr` | 打开最近文件列表  |
-| `Space fd` | 打开诊断列表      |
+| Key | Action |
+| --- | --- |
+| `Space e` | Show / hide file tree |
+| `Space E` | Focus file tree |
+| `Space ff` | Find files |
+| `Space fg` | Search text globally |
+| `Space fb` | Open buffer list |
+| `Space fr` | Open recent files |
+| `Space fd` | Open diagnostics list |
 
-### 文件 Tab / Buffer
+### Tabs and Buffers
 
-| 快捷键                 | 作用                       |
-| ---------------------- | -------------------------- |
-| `Tab`                  | 切到下一个文件 tab         |
-| `Shift-Tab`            | 切到上一个文件 tab         |
-| `Space 1` 到 `Space 9` | 跳到第 1 到第 9 个文件 tab |
-| `Space bd`             | 关闭当前 buffer            |
+| Key | Action |
+| --- | --- |
+| `Tab` | Next file tab |
+| `Shift-Tab` | Previous file tab |
+| `Space 1` to `Space 9` | Jump to file tab 1 to 9 |
+| `Space bd` | Close current buffer |
 
-### 窗口切换
+### Window Navigation
 
-| 快捷键     | 作用         |
-| ---------- | ------------ |
-| `Option-h` | 切到左侧窗口 |
-| `Option-j` | 切到下方窗口 |
-| `Option-k` | 切到上方窗口 |
-| `Option-l` | 切到右侧窗口 |
-| `Ctrl-h`   | 切到左侧窗口 |
-| `Ctrl-j`   | 切到下方窗口 |
-| `Ctrl-k`   | 切到上方窗口 |
-| `Ctrl-l`   | 切到右侧窗口 |
+| Key | Action |
+| --- | --- |
+| `Option-h` | Focus left window |
+| `Option-j` | Focus lower window |
+| `Option-k` | Focus upper window |
+| `Option-l` | Focus right window |
+| `Ctrl-h` | Focus left window |
+| `Ctrl-j` | Focus lower window |
+| `Ctrl-k` | Focus upper window |
+| `Ctrl-l` | Focus right window |
 
 ### Terminal
 
-| 快捷键     | 作用                      |
-| ---------- | ------------------------- |
-| `Space tt` | 新建 terminal             |
-| `Space tl` | 聚焦 / 切换 terminal 列表 |
-| `Esc Esc`  | terminal 回到 Normal 模式 |
+| Key | Action |
+| --- | --- |
+| `Space tt` | Create a new terminal |
+| `Space tl` | Focus / toggle terminal list |
+| `Esc Esc` | Leave terminal insert mode |
 
 ### Git
 
-| 快捷键     | 作用                |
-| ---------- | ------------------- |
-| `Space gw` | 打开工作区 Git 面板 |
-| `Space gd` | 打开 `diffview`     |
-| `Space gh` | 查看当前文件历史    |
-| `Space gq` | 关闭 `diffview`     |
-| `Space gx` | 退出 Git 工作区     |
-| `]h`       | 下一处 Git 修改     |
-| `[h`       | 上一处 Git 修改     |
+| Key | Action |
+| --- | --- |
+| `Space gw` | Open the workspace Git panel |
+| `Space gd` | Open `diffview` |
+| `Space gh` | View current file history |
+| `Space gq` | Close `diffview` |
+| `Space gx` | Exit the Git workspace |
+| `]h` | Next Git change |
+| `[h` | Previous Git change |
 
-### LSP / 代码导航
+### LSP and Code Navigation
 
-以下键位只在 LSP attach 到当前文件后可用。
+These mappings are available after an LSP client attaches to the current file.
 
-| 快捷键     | 作用                   |
-| ---------- | ---------------------- |
-| `<F12>`    | 优先跳实现，否则跳定义 |
-| `gd`       | 跳到定义               |
-| `gr`       | 查看引用               |
-| `gI`       | 跳到实现               |
-| `K`        | 查看悬浮文档           |
-| `Space ds` | 文档符号列表           |
-| `Space ca` | Code Action            |
-| `Space rn` | 重命名符号             |
-| `Space cf` | 格式化当前文件         |
-| `Ctrl-o`   | 回到上一个跳转点       |
-| `Ctrl-i`   | 前进到下一个跳转点     |
+| Key | Action |
+| --- | --- |
+| `<F12>` | Prefer implementation, otherwise definition |
+| `gd` | Go to definition |
+| `gr` | Find references |
+| `gI` | Go to implementation |
+| `K` | Hover documentation |
+| `Space ds` | Document symbols |
+| `Space ca` | Code action |
+| `Space rn` | Rename symbol |
+| `Space cf` | Format current file |
+| `Ctrl-o` | Jump back |
+| `Ctrl-i` | Jump forward |
 
-### 诊断
+### Diagnostics
 
-| 快捷键     | 作用           |
-| ---------- | -------------- |
-| `[d`       | 上一个诊断     |
-| `]d`       | 下一个诊断     |
-| `Space cd` | 当前行诊断浮窗 |
+| Key | Action |
+| --- | --- |
+| `[d` | Previous diagnostic |
+| `]d` | Next diagnostic |
+| `Space cd` | Line diagnostic popup |
 
-## 目录结构
+## Repository Structure
 
 ```text
 .
 ├── AGENTS.md
 ├── README.md
+├── README.zh-CN.md
 ├── bin
 │   └── install.sh
 ├── init.lua
@@ -257,9 +260,9 @@ Ctrl-o
         └── init.lua
 ```
 
-## 主要语言支持
+## Language Support
 
-默认会安装并启用这些语言服务器：
+These language servers are installed and enabled by default:
 
 - Bash
 - Go
@@ -271,10 +274,10 @@ Ctrl-o
 - TypeScript / Vue
 - YAML
 
-如果系统里有 `sourcekit-lsp`，也会自动启用 Swift。
+If `sourcekit-lsp` is available on the system, Swift is also enabled automatically.
 
-## 说明
+## Notes
 
-- 插件版本锁在 `lazy-lock.json`
-- 这个仓库有自己的 `AGENTS.md`
-- 按仓库规则，修改后必须提交一个 git commit
+- Plugin versions are locked in `lazy-lock.json`
+- This repository has its own `AGENTS.md`
+- By repository rule, every change must be committed
