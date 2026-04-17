@@ -199,8 +199,11 @@ end
 local function apply_ui_highlights()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
   local end_of_buffer = vim.api.nvim_get_hl(0, { name = "EndOfBuffer", link = false })
-  local normal_bg = normal.bg
+  local line_nr = vim.api.nvim_get_hl(0, { name = "LineNr", link = false })
+  local cursor_line_nr = vim.api.nvim_get_hl(0, { name = "CursorLineNr", link = false })
+  local normal_bg = "#2B3036"
   local normal_fg = normal.fg
+  local terminal_bg = "#1F2428"
   local vscode = {
     bracket1 = "#b392f0",
     bracket2 = "#ec619c",
@@ -221,6 +224,14 @@ local function apply_ui_highlights()
     end
   end
 
+  vim.api.nvim_set_hl(0, "Normal", { fg = normal_fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "NormalNC", { fg = normal_fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "NormalFloat", { fg = normal_fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "SignColumn", { fg = normal_fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "FoldColumn", { fg = normal_fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "LineNr", { fg = line_nr.fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "CursorLineNr", { fg = cursor_line_nr.fg, bg = normal_bg })
+  vim.api.nvim_set_hl(0, "EndOfBuffer", { fg = end_of_buffer.fg, bg = normal_bg })
   vim.api.nvim_set_hl(0, "WinSeparator", { fg = "#585b70", bg = normal_bg })
   vim.api.nvim_set_hl(0, "VertSplit", { link = "WinSeparator" })
   vim.api.nvim_set_hl(0, "NvimTreeNormal", { fg = normal_fg, bg = normal_bg })
@@ -231,8 +242,8 @@ local function apply_ui_highlights()
   local opened_file = vim.api.nvim_get_hl(0, { name = "NvimTreeOpenedFile", link = false })
   local popup_bg = opened_file.fg or 0x89B4FA
   vim.api.nvim_set_hl(0, "NvimTreeNamePopup", { fg = normal_bg, bg = popup_bg, bold = true })
-  vim.api.nvim_set_hl(0, "TerminalNormal", { fg = vscode.terminal_fg, bg = "#181825" })
-  vim.api.nvim_set_hl(0, "TerminalNormalNC", { fg = vscode.terminal_fg, bg = "#11111b" })
+  vim.api.nvim_set_hl(0, "TerminalNormal", { fg = vscode.terminal_fg, bg = terminal_bg })
+  vim.api.nvim_set_hl(0, "TerminalNormalNC", { fg = vscode.terminal_fg, bg = terminal_bg })
   vim.api.nvim_set_hl(0, "TerminalCursorLine", { bg = "#313244" })
   vim.api.nvim_set_hl(0, "ScrollbarHandle", { bg = "#585b70", fg = "#585b70" })
   vim.api.nvim_set_hl(0, "ScrollbarCursor", { bg = normal_bg, fg = "#89b4fa" })
