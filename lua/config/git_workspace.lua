@@ -8,8 +8,6 @@ local state = {
   sidebar_buf = nil,
   sidebar_win = nil,
   main_win = nil,
-  left_diff_win = nil,
-  right_diff_win = nil,
   current_diff = nil,
   line_items = {},
   repo_expanded = {},
@@ -44,8 +42,6 @@ local function reset_closed_handles()
     state.tabpage = nil
     state.sidebar_win = nil
     state.main_win = nil
-    state.left_diff_win = nil
-    state.right_diff_win = nil
     state.current_diff = nil
   end
 
@@ -55,15 +51,9 @@ local function reset_closed_handles()
   if not in_git_tab(state.main_win) then
     state.main_win = nil
   end
-  if not in_git_tab(state.left_diff_win) then
-    state.left_diff_win = nil
-  end
-  if not in_git_tab(state.right_diff_win) then
-    state.right_diff_win = nil
-  end
   if state.current_diff ~= nil then
     local current = state.current_diff
-    if not in_git_tab(current.left_win) or not in_git_tab(current.right_win) then
+    if not is_valid_buf(current.buf) or not in_git_tab(current.win) then
       state.current_diff = nil
     end
   end
@@ -352,26 +342,6 @@ local function focus_sidebar()
   end
 end
 
-local function focus_main()
-  reset_closed_handles()
-
-  if in_git_tab(state.right_diff_win) then
-    api.nvim_set_current_win(state.right_diff_win)
-    return
-  end
-
-  if in_git_tab(state.main_win) then
-    api.nvim_set_current_win(state.main_win)
-    return
-  end
-
-  for _, win in ipairs(main_wins()) do
-    state.main_win = win
-    api.nvim_set_current_win(win)
-    return
-  end
-end
-
 local function window_call(win, callback)
   if not is_valid_win(win) then
     return
@@ -421,7 +391,7 @@ local function placeholder_buf()
   local lines = {
     "Workspace Source Control",
     "",
-    "Select a changed file from the left panel to open a side-by-side diff.",
+    "Select a changed file from the left panel to open a unified diff.",
     "",
     "Controls:",
     "  <CR> / o  open file diff",
@@ -623,22 +593,6 @@ function M.render()
   end
 end
 
-local function resolve_base_content(repo, file)
-  if file.untracked or (file.added and not file.old_path) then
-    return ""
-  end
-
-  local path = file.old_path or file.path
-  local out = run_git({ "git", "show", "HEAD:" .. path }, repo.path)
-
-  if out then
-    return out
-  end
-
-  out = run_git({ "git", "show", ":" .. path }, repo.path)
-  return out or ""
-end
-
 local function close_extra_main_windows(keep)
   for _, win in ipairs(main_wins()) do
     if win ~= keep then
@@ -647,186 +601,132 @@ local function close_extra_main_windows(keep)
   end
 end
 
-local function ensure_diff_windows()
-  reset_closed_handles()
-
-  if in_git_tab(state.left_diff_win) and in_git_tab(state.right_diff_win) then
-    return state.left_diff_win, state.right_diff_win
-  end
-
-  local anchor = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
-  if not anchor then
-    return nil, nil
-  end
-
-  close_extra_main_windows(anchor)
-  state.main_win = anchor
-
-  window_call(anchor, function()
-    vim.cmd("diffoff!")
-    vim.cmd("leftabove vsplit")
-  end)
-
-  local left
-  local right
-  for _, win in ipairs(main_wins()) do
-    if win ~= state.sidebar_win then
-      if not left then
-        left = win
-      else
-        right = win
-      end
-    end
-  end
-
-  if left and right and api.nvim_win_get_position(left)[2] > api.nvim_win_get_position(right)[2] then
-    left, right = right, left
-  end
-
-  state.left_diff_win = left
-  state.right_diff_win = right
-  state.main_win = right
-
-  return left, right
-end
-
-local function open_file_buffer(win, abs_path)
+local function configure_main_window(win)
   if not is_valid_win(win) then
     return
   end
 
-  window_call(win, function()
-    vim.cmd("silent edit " .. vim.fn.fnameescape(abs_path))
-    vim.wo.wrap = false
-  end)
-end
-
-local function set_buffer(win, buf)
-  if is_valid_win(win) and is_valid_buf(buf) then
-    api.nvim_win_set_buf(win, buf)
-    vim.wo[win].wrap = false
-  end
-end
-
-local function configure_diff_window(win)
-  if not is_valid_win(win) then
-    return
-  end
-
+  vim.wo[win].diff = false
   vim.wo[win].foldcolumn = "0"
   vim.wo[win].foldenable = false
   vim.wo[win].foldmethod = "manual"
   vim.wo[win].wrap = false
 
   window_call(win, function()
+    vim.cmd("silent! diffoff!")
     vim.cmd("silent! normal! zR")
   end)
 end
 
-local function enable_diff(left, right)
-  window_call(left, function()
-    vim.cmd("diffthis")
-  end)
+local function run_git_capture(args, cwd, ok_codes)
+  local result = vim.system(args, {
+    cwd = cwd,
+    text = true,
+  }):wait()
 
-  window_call(right, function()
-    vim.cmd("diffthis")
-  end)
+  if not vim.tbl_contains(ok_codes or { 0 }, result.code) then
+    return nil, vim.trim(result.stderr or result.stdout or "")
+  end
+
+  return result.stdout or "", nil
 end
 
-local function hunk_range(start, count, line_count)
-  local first = math.max(start, 1)
-  local last = first + math.max(count, 1) - 1
+local function diff_lines(output)
+  local lines = vim.split(output or "", "\n", { plain = true })
+  if #lines > 1 and lines[#lines] == "" then
+    table.remove(lines, #lines)
+  end
+  if vim.tbl_isempty(lines) then
+    return { "" }
+  end
+  return lines
+end
 
-  if line_count > 0 then
-    first = math.min(first, line_count)
-    last = math.min(last, line_count)
+local function repo_base_ref(repo_path)
+  local head = run_git({ "git", "rev-parse", "--verify", "HEAD" }, repo_path)
+  if head then
+    return "HEAD"
   end
 
-  if last < first then
-    last = first
+  return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+end
+
+local function unified_diff_output(repo, file)
+  if file.untracked then
+    return run_git_capture({
+      "git",
+      "diff",
+      "--no-index",
+      "--no-color",
+      "--no-ext-diff",
+      "--",
+      "/dev/null",
+      file.path,
+    }, repo.path, { 0, 1 })
   end
 
-  return {
-    start = first,
-    finish = last,
+  local args = {
+    "git",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--find-renames",
+    "--find-copies",
+    repo_base_ref(repo.path),
+    "--",
   }
+
+  if file.old_path and file.old_path ~= file.path then
+    table.insert(args, file.old_path)
+  end
+  table.insert(args, file.path)
+
+  return run_git(args, repo.path)
 end
 
-local function buffer_text(buf)
-  if not is_valid_buf(buf) then
-    return ""
+local function diff_hunks(lines)
+  local hunks = {}
+
+  for line_number, line in ipairs(lines) do
+    if line:match("^@@") then
+      table.insert(hunks, line_number)
+    end
   end
 
-  return table.concat(api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+  return hunks
 end
 
-local function compute_diff_ranges(left_buf, right_buf)
-  local hunks = vim.diff(buffer_text(left_buf), buffer_text(right_buf), {
-    algorithm = "histogram",
-    ctxlen = 0,
-    result_type = "indices",
-  })
-
-  local left_count = math.max(api.nvim_buf_line_count(left_buf), 1)
-  local right_count = math.max(api.nvim_buf_line_count(right_buf), 1)
-  local left_ranges = {}
-  local right_ranges = {}
-
-  for _, hunk in ipairs(hunks) do
-    table.insert(left_ranges, hunk_range(hunk[1], hunk[2], left_count))
-    table.insert(right_ranges, hunk_range(hunk[3], hunk[4], right_count))
-  end
-
-  return left_ranges, right_ranges
-end
-
-local function refresh_current_diff()
-  local current = state.current_diff
-  if current == nil then
-    return nil
-  end
-
-  if not is_valid_buf(current.left_buf) or not is_valid_buf(current.right_buf) then
-    state.current_diff = nil
-    return nil
-  end
-
-  current.left_ranges, current.right_ranges = compute_diff_ranges(current.left_buf, current.right_buf)
-  return current
-end
-
-local function jump_to_range(win, ranges, direction)
-  if not is_valid_win(win) or #ranges == 0 then
+local function jump_to_hunk(win, hunks, direction)
+  if not is_valid_win(win) or #hunks == 0 then
     return false
   end
 
-  local cursor = api.nvim_win_get_cursor(win)
-  local current_line = cursor[1]
+  local current_line = api.nvim_win_get_cursor(win)[1]
   local target
 
   if direction == "next" then
-    for _, range in ipairs(ranges) do
-      if range.start > current_line then
-        target = range
+    for _, line_number in ipairs(hunks) do
+      if line_number > current_line then
+        target = line_number
         break
       end
     end
   else
-    for index = #ranges, 1, -1 do
-      local range = ranges[index]
-      if range.finish < current_line then
-        target = range
+    for index = #hunks, 1, -1 do
+      local line_number = hunks[index]
+      if line_number < current_line then
+        target = line_number
         break
       end
     end
   end
 
-  if target == nil then
+  if not target then
     return false
   end
 
   api.nvim_set_current_win(win)
-  api.nvim_win_set_cursor(win, { target.start, 0 })
+  api.nvim_win_set_cursor(win, { target, 0 })
   window_call(win, function()
     vim.cmd("normal! zz")
   end)
@@ -834,61 +734,53 @@ local function jump_to_range(win, ranges, direction)
 end
 
 local function open_diff(repo, file)
-  if not repo or not file then
-    return
-  end
-
-  if not is_valid_tab(state.tabpage) then
+  if not repo or not file or not is_valid_tab(state.tabpage) then
     return
   end
 
   api.nvim_set_current_tabpage(state.tabpage)
 
-  local left, right = ensure_diff_windows()
-  if not left or not right then
+  local win = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
+  if not win then
     return
   end
 
-  local base_path = file.old_path or file.path
-  local base_lines = vim.split(resolve_base_content(repo, file), "\n", { plain = true })
-  if vim.tbl_isempty(base_lines) then
-    base_lines = { "" }
+  close_extra_main_windows(win)
+  state.main_win = win
+
+  local output, err = unified_diff_output(repo, file)
+  local lines
+  if output and output ~= "" then
+    lines = diff_lines(output)
+  elseif err and err ~= "" then
+    lines = {
+      "Unable to render diff for " .. file.path,
+      "",
+      err,
+    }
+  else
+    lines = {
+      "No textual diff available for " .. file.path,
+    }
   end
 
-  local left_buf = create_scratch_buffer(
-    string.format("git://%s/%s@HEAD", repo.name, base_path),
-    base_lines,
-    base_path,
+  local buf = create_scratch_buffer(
+    string.format("git-workspace://%s/%s.diff", repo.name, file.path),
+    lines,
+    nil,
     false
   )
-
-  local abs_path = join(repo.path, file.path)
-  if file.deleted or uv.fs_stat(abs_path) == nil then
-    local right_buf = create_scratch_buffer(
-      string.format("git://%s/%s@WORKTREE", repo.name, file.path),
-      { "" },
-      file.path,
-      false
-    )
-    set_buffer(right, right_buf)
-  else
-    open_file_buffer(right, abs_path)
-  end
-
-  set_buffer(left, left_buf)
-  enable_diff(left, right)
-  configure_diff_window(left)
-  configure_diff_window(right)
+  vim.bo[buf].filetype = "diff"
+  api.nvim_win_set_buf(win, buf)
+  configure_main_window(win)
 
   state.current_diff = {
     file_path = file.path,
-    left_buf = api.nvim_win_get_buf(left),
-    left_win = left,
-    right_buf = api.nvim_win_get_buf(right),
-    right_win = right,
+    buf = buf,
+    hunks = diff_hunks(lines),
+    win = win,
   }
-  refresh_current_diff()
-  api.nvim_set_current_win(right)
+  api.nvim_set_current_win(win)
 end
 
 function M.toggle_selected()
@@ -944,18 +836,14 @@ function M.jump_change(direction)
     return false
   end
 
-  local current = refresh_current_diff()
-  if current == nil then
+  local current = state.current_diff
+  if current == nil or not is_valid_buf(current.buf) or not in_git_tab(current.win) then
+    state.current_diff = nil
     return false
   end
 
-  local win = api.nvim_get_current_win()
-  if win == current.right_win then
-    return jump_to_range(win, current.right_ranges or {}, direction)
-  end
-
-  if win == current.left_win then
-    return jump_to_range(win, current.left_ranges or {}, direction)
+  if api.nvim_get_current_win() == current.win then
+    return jump_to_hunk(current.win, current.hunks or {}, direction)
   end
 
   return false
@@ -972,8 +860,6 @@ function M.close()
   state.tabpage = nil
   state.sidebar_win = nil
   state.main_win = nil
-  state.left_diff_win = nil
-  state.right_diff_win = nil
   state.current_diff = nil
 
   if api.nvim_get_current_tabpage() == tabpage then
@@ -999,14 +885,13 @@ local function ensure_layout()
     vim.cmd("tabnew")
     state.tabpage = api.nvim_get_current_tabpage()
     state.main_win = api.nvim_get_current_win()
-    state.left_diff_win = nil
-    state.right_diff_win = state.main_win
     state.current_diff = nil
     api.nvim_win_set_buf(state.main_win, placeholder_buf())
   end
 
   state.main_win = in_git_tab(state.main_win) and state.main_win or api.nvim_get_current_win()
-  state.right_diff_win = state.main_win
+  close_extra_main_windows(state.main_win)
+  configure_main_window(state.main_win)
 
   attach_sidebar()
   M.render()
