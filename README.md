@@ -17,7 +17,8 @@ Aeris 是一套偏现代 IDE 工作流的 Neovim 配置。
 - 多仓库 Git workspace
 - 代码跳转，代码提示，代码引用跳转
 - LSP / Treesitter / 格式化 / 补全
-- Git支持，Codex生成commit message
+- Git支持，Codex自动生成commit message
+- markdown 展示支持
 
 ## 系统要求
 
