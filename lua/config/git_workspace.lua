@@ -13,6 +13,7 @@ local state = {
   repo_expanded = {},
   dir_expanded = {},
   repo_actions = {},
+  sidebar_focus = nil,
   sidebar_width = 38,
 }
 
@@ -195,6 +196,60 @@ local function set_repo_action_state(repo_path, values)
     repo_state[key] = value
   end
   return repo_state
+end
+
+local function set_sidebar_focus(repo_path, target)
+  state.sidebar_focus = {
+    repo_path = repo_path,
+    target = target,
+  }
+end
+
+local function clear_sidebar_focus()
+  state.sidebar_focus = nil
+end
+
+local function wrap_sidebar_text(text, indent, max_width)
+  indent = indent or "   "
+  text = trim(text)
+  if text == "" then
+    return { indent }
+  end
+
+  max_width = max_width or math.max(state.sidebar_width - 2, 18)
+  local content_width = math.max(max_width - vim.fn.strdisplaywidth(indent), 12)
+  local wrapped = {}
+
+  for _, paragraph in ipairs(vim.split(text, "\n", { plain = true })) do
+    local words = vim.split(paragraph, "%s+", { trimempty = true })
+    if vim.tbl_isempty(words) then
+      table.insert(wrapped, indent)
+      goto continue
+    end
+
+    local current = indent
+    local current_width = 0
+
+    for _, word in ipairs(words) do
+      local word_width = vim.fn.strdisplaywidth(word)
+      if current_width == 0 then
+        current = indent .. word
+        current_width = word_width
+      elseif current_width + 1 + word_width <= content_width then
+        current = current .. " " .. word
+        current_width = current_width + 1 + word_width
+      else
+        table.insert(wrapped, current)
+        current = indent .. word
+        current_width = word_width
+      end
+    end
+
+    table.insert(wrapped, current)
+    ::continue::
+  end
+
+  return wrapped
 end
 
 local function parse_file_status(line)
@@ -649,6 +704,12 @@ local function add_sidebar_line(lines, item, text)
   end
 end
 
+local function add_wrapped_sidebar_lines(lines, item, text)
+  for _, wrapped in ipairs(wrap_sidebar_text(text, "     ")) do
+    add_sidebar_line(lines, item, wrapped)
+  end
+end
+
 local function render_repo_actions(lines, repo)
   local action_state = repo_action_state(repo.path)
   local has_changes = not vim.tbl_isempty(repo.files)
@@ -657,6 +718,8 @@ local function render_repo_actions(lines, repo)
   if action_state.busy then
     add_sidebar_line(lines, {
       kind = "status",
+      repo = repo,
+      focus_target = action_state.busy_focus or "busy",
       highlight = "Comment",
     }, "   … " .. shorten(action_state.busy, 28))
   end
@@ -664,31 +727,19 @@ local function render_repo_actions(lines, repo)
   if action_state.error then
     add_sidebar_line(lines, {
       kind = "status",
+      repo = repo,
       highlight = "DiagnosticError",
     }, "   ! " .. shorten(action_state.error, 28))
   end
 
-  if action_state.info then
-    add_sidebar_line(lines, {
-      kind = "status",
-      highlight = "DiffAdd",
-    }, "   ✓ " .. shorten(action_state.info, 28))
-  end
-
-  if has_changes or message then
+  if action_state.push_available then
     add_sidebar_line(lines, {
       kind = "action",
       repo = repo,
-      action = "generate_message",
-      highlight = "Function",
-    }, "   [ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
-  end
-
-  if message then
-    add_sidebar_line(lines, {
-      kind = "status",
-      highlight = "String",
-    }, "   msg: " .. shorten(message, 28))
+      action = "push",
+      focus_target = "push",
+      highlight = "Identifier",
+    }, "   [ Push " .. shorten(action_state.push_branch or trim(repo.branch), 18) .. " ]")
   end
 
   if message and has_changes then
@@ -696,18 +747,27 @@ local function render_repo_actions(lines, repo)
       kind = "action",
       repo = repo,
       action = "commit",
+      focus_target = "commit",
       highlight = "DiffAdd",
     }, "   [ Commit staged changes ]")
   end
 
-  if action_state.push_available then
-    local branch_label = action_state.push_branch or trim(repo.branch)
+  if (has_changes or message) and action_state.busy_focus ~= "busy_generate_message" then
     add_sidebar_line(lines, {
       kind = "action",
       repo = repo,
-      action = "push",
-      highlight = "Identifier",
-    }, "   [ Push " .. shorten(branch_label, 18) .. " ]")
+      action = "generate_message",
+      focus_target = "generate_message",
+      highlight = "Function",
+    }, "   [ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
+  end
+
+  if message then
+    add_wrapped_sidebar_lines(lines, {
+      kind = "message",
+      repo = repo,
+      highlight = "String",
+    }, message)
   end
 end
 
@@ -800,6 +860,17 @@ function M.render()
   for line = hint_start, #lines - 1 do
     api.nvim_buf_add_highlight(state.sidebar_buf, -1, "Comment", line, 0, -1)
   end
+
+  local focus = state.sidebar_focus
+  if focus and is_valid_win(state.sidebar_win) then
+    for line, item in pairs(state.line_items) do
+      if item.repo and item.repo.path == focus.repo_path and item.focus_target == focus.target then
+        api.nvim_win_set_cursor(state.sidebar_win, { line, 0 })
+        clear_sidebar_focus()
+        break
+      end
+    end
+  end
 end
 
 local function show_action_output(title, body_lines, filetype)
@@ -838,10 +909,12 @@ local function run_repo_action(repo, action_name)
 
   if action_name == "generate_message" then
     set_repo_action_state(repo.path, {
-      busy = "Generating commit message",
+      busy = "Generating commit message...",
+      busy_focus = "busy_generate_message",
       error = false,
       info = false,
     })
+    set_sidebar_focus(repo.path, "busy_generate_message")
     schedule_sidebar_refresh()
 
     local output_file = vim.fn.tempname()
@@ -878,8 +951,10 @@ local function run_repo_action(repo, action_name)
       if result.code ~= 0 or message == "" then
         set_repo_action_state(repo.path, {
           busy = false,
+          busy_focus = false,
           error = trim(result.stderr or result.stdout or "Failed to generate commit message"),
         })
+        set_sidebar_focus(repo.path, "generate_message")
         notify_result("Failed to generate commit message for " .. repo.name, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
@@ -887,11 +962,12 @@ local function run_repo_action(repo, action_name)
 
       set_repo_action_state(repo.path, {
         busy = false,
+        busy_focus = false,
         commit_message = message,
         error = false,
-        info = "Commit message ready",
+        info = false,
       })
-      show_action_output("Commit Message · " .. repo.name, { message }, "gitcommit")
+      set_sidebar_focus(repo.path, "commit")
       schedule_sidebar_refresh()
     end)
     return
@@ -910,10 +986,12 @@ local function run_repo_action(repo, action_name)
     end
 
     set_repo_action_state(repo.path, {
-      busy = "Running git add && git commit",
+      busy = "Running git add && git commit...",
+      busy_focus = "busy_commit",
       error = false,
       info = false,
     })
+    set_sidebar_focus(repo.path, "busy_commit")
     schedule_sidebar_refresh()
 
     run_system_async({ "git", "add", "-A" }, {
@@ -923,8 +1001,10 @@ local function run_repo_action(repo, action_name)
       if add_result.code ~= 0 then
         set_repo_action_state(repo.path, {
           busy = false,
+          busy_focus = false,
           error = trim(add_result.stderr or add_result.stdout or "git add failed"),
         })
+        set_sidebar_focus(repo.path, "commit")
         notify_result("git add failed for " .. repo.name, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
@@ -937,8 +1017,10 @@ local function run_repo_action(repo, action_name)
         if commit_result.code ~= 0 then
           set_repo_action_state(repo.path, {
             busy = false,
+            busy_focus = false,
             error = trim(commit_result.stderr or commit_result.stdout or "git commit failed"),
           })
+          set_sidebar_focus(repo.path, "commit")
           notify_result("git commit failed for " .. repo.name, vim.log.levels.ERROR)
           schedule_sidebar_refresh()
           return
@@ -948,12 +1030,14 @@ local function run_repo_action(repo, action_name)
         local sha = run_git({ "git", "rev-parse", "--short", "HEAD" }, repo.path) or ""
         set_repo_action_state(repo.path, {
           busy = false,
+          busy_focus = false,
           error = false,
-          info = "Committed " .. trim(sha),
+          info = false,
           last_commit_sha = trim(sha),
           push_available = branch ~= nil,
           push_branch = branch,
         })
+        set_sidebar_focus(repo.path, "push")
         show_action_output(
           "Commit Result · " .. repo.name,
           vim.split(trim(commit_result.stdout or "Commit created"), "\n", { trimempty = true }),
@@ -977,11 +1061,14 @@ local function run_repo_action(repo, action_name)
     end
 
     set_repo_action_state(repo.path, {
-      busy = "Pushing branch " .. branch,
+      busy = "Pushing branch " .. branch .. "...",
+      busy_focus = "busy_push",
       error = false,
       info = false,
+      push_available = true,
       push_branch = branch,
     })
+    set_sidebar_focus(repo.path, "busy_push")
     schedule_sidebar_refresh()
 
     run_system_async(args, {
@@ -991,9 +1078,11 @@ local function run_repo_action(repo, action_name)
       if push_result.code ~= 0 then
         set_repo_action_state(repo.path, {
           busy = false,
+          busy_focus = false,
           error = trim(push_result.stderr or push_result.stdout or "git push failed"),
           push_available = true,
         })
+        set_sidebar_focus(repo.path, "push")
         notify_result("git push failed for " .. repo.name, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
@@ -1001,10 +1090,12 @@ local function run_repo_action(repo, action_name)
 
       set_repo_action_state(repo.path, {
         busy = false,
+        busy_focus = false,
         error = false,
-        info = "Pushed " .. branch,
-        push_available = false,
+        info = false,
+        push_available = true,
       })
+      set_sidebar_focus(repo.path, "push")
       show_action_output(
         "Push Result · " .. repo.name,
         vim.split(trim(push_result.stdout or "Push completed"), "\n", { trimempty = true }),
