@@ -209,6 +209,9 @@ local function apply_ui_highlights()
   vim.api.nvim_set_hl(0, "NvimTreeEndOfBuffer", { fg = end_of_buffer.fg, bg = normal_bg })
   vim.api.nvim_set_hl(0, "NvimTreeSignColumn", { fg = normal_fg, bg = normal_bg })
   vim.api.nvim_set_hl(0, "NvimTreeWinSeparator", { link = "WinSeparator" })
+  local opened_file = vim.api.nvim_get_hl(0, { name = "NvimTreeOpenedFile", link = false })
+  local popup_bg = opened_file.fg or 0x89B4FA
+  vim.api.nvim_set_hl(0, "NvimTreeNamePopup", { fg = normal_bg, bg = popup_bg, bold = true })
   vim.api.nvim_set_hl(0, "TerminalNormal", { bg = "#181825" })
   vim.api.nvim_set_hl(0, "TerminalNormalNC", { bg = "#11111b" })
   vim.api.nvim_set_hl(0, "TerminalCursorLine", { bg = "#313244" })
@@ -533,7 +536,7 @@ local function show_nvim_tree_name_popup()
     noautocmd = true,
     zindex = 45,
   })
-  vim.wo[nvim_tree_name_popup.win].winhighlight = "Normal:NormalFloat"
+  vim.wo[nvim_tree_name_popup.win].winhighlight = "Normal:NvimTreeNamePopup"
 end
 
 vim.api.nvim_create_autocmd("TextYankPost", {
