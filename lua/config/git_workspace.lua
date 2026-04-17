@@ -12,11 +12,14 @@ local state = {
   line_items = {},
   repo_expanded = {},
   dir_expanded = {},
+  repo_actions = {},
   sidebar_width = 38,
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
 local diff_namespace = api.nvim_create_namespace("erwin_git_workspace_diff")
+local close_extra_main_windows
+local configure_main_window
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -157,6 +160,41 @@ local function format_counts(counts)
   end
 
   return table.concat(parts, " ")
+end
+
+local function trim(text)
+  return vim.trim(text or "")
+end
+
+local function shorten(text, max_width)
+  text = trim(text)
+  max_width = max_width or 32
+
+  if text == "" then
+    return ""
+  end
+
+  if vim.fn.strdisplaywidth(text) <= max_width then
+    return text
+  end
+
+  return vim.fn.strcharpart(text, 0, math.max(max_width - 1, 1)) .. "…"
+end
+
+local function repo_action_state(repo_path)
+  if state.repo_actions[repo_path] == nil then
+    state.repo_actions[repo_path] = {}
+  end
+
+  return state.repo_actions[repo_path]
+end
+
+local function set_repo_action_state(repo_path, values)
+  local repo_state = repo_action_state(repo_path)
+  for key, value in pairs(values) do
+    repo_state[key] = value
+  end
+  return repo_state
 end
 
 local function parse_file_status(line)
@@ -324,6 +362,100 @@ function M.collect(root)
   return repos
 end
 
+local function schedule_sidebar_refresh()
+  vim.schedule(function()
+    if is_valid_tab(state.tabpage) then
+      M.refresh()
+    end
+  end)
+end
+
+local function notify_result(message, level)
+  vim.schedule(function()
+    vim.notify(message, level or vim.log.levels.INFO)
+  end)
+end
+
+local function run_system_async(args, opts, callback)
+  vim.system(args, opts or {}, function(result)
+    vim.schedule(function()
+      callback(result)
+    end)
+  end)
+end
+
+local function current_branch(repo_path)
+  local branch, err = run_git({ "git", "rev-parse", "--abbrev-ref", "HEAD" }, repo_path)
+  branch = trim(branch)
+
+  if branch == "" or branch == "HEAD" then
+    return nil, err ~= "" and err or "Detached HEAD cannot be pushed"
+  end
+
+  return branch, nil
+end
+
+local function configured_remote(repo_path, branch)
+  local remote = run_git({ "git", "config", "branch." .. branch .. ".remote" }, repo_path)
+  remote = trim(remote)
+  if remote ~= "" then
+    return remote
+  end
+
+  local remotes = run_git({ "git", "remote" }, repo_path)
+  if not remotes then
+    return nil
+  end
+
+  local names = vim.split(trim(remotes), "\n", { trimempty = true })
+  if vim.tbl_isempty(names) then
+    return nil
+  end
+
+  for _, name in ipairs(names) do
+    if name == "origin" then
+      return name
+    end
+  end
+
+  return names[1]
+end
+
+local function push_command(repo_path)
+  local branch, err = current_branch(repo_path)
+  if not branch then
+    return nil, nil, err
+  end
+
+  local upstream = run_git({ "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" }, repo_path)
+  if upstream and trim(upstream) ~= "" then
+    return { "git", "push" }, branch, nil
+  end
+
+  local remote = configured_remote(repo_path, branch)
+  if not remote then
+    return nil, branch, "No git remote configured for this repository"
+  end
+
+  return { "git", "push", "--set-upstream", remote, branch }, branch, nil
+end
+
+local function normalize_commit_message(text)
+  local lines = vim.split(text or "", "\n", { trimempty = true })
+  local message = ""
+
+  for _, line in ipairs(lines) do
+    line = trim(line)
+    if line ~= "" and not line:match("^```") then
+      message = line
+      break
+    end
+  end
+
+  message = message:gsub("^['\"]", ""):gsub("['\"]$", "")
+  return trim(message)
+end
+
 local function selected_item()
   reset_closed_handles()
 
@@ -393,9 +525,10 @@ local function placeholder_buf()
     "Workspace Source Control",
     "",
     "Select a changed file from the left panel to open a unified diff.",
+    "Select a repo action to generate a commit message, commit, or push.",
     "",
     "Controls:",
-    "  <CR> / o  open file diff",
+    "  <CR> / o  open file diff or run action",
     "  <Tab>     expand or collapse",
     "  r         refresh status",
     "  q         close this Git tab",
@@ -509,6 +642,75 @@ local function render_tree_node(lines, repo, node, depth)
   }
 end
 
+local function add_sidebar_line(lines, item, text)
+  table.insert(lines, text)
+  if item then
+    state.line_items[#lines] = item
+  end
+end
+
+local function render_repo_actions(lines, repo)
+  local action_state = repo_action_state(repo.path)
+  local has_changes = not vim.tbl_isempty(repo.files)
+  local message = action_state.commit_message
+
+  if action_state.busy then
+    add_sidebar_line(lines, {
+      kind = "status",
+      highlight = "Comment",
+    }, "   … " .. shorten(action_state.busy, 28))
+  end
+
+  if action_state.error then
+    add_sidebar_line(lines, {
+      kind = "status",
+      highlight = "DiagnosticError",
+    }, "   ! " .. shorten(action_state.error, 28))
+  end
+
+  if action_state.info then
+    add_sidebar_line(lines, {
+      kind = "status",
+      highlight = "DiffAdd",
+    }, "   ✓ " .. shorten(action_state.info, 28))
+  end
+
+  if has_changes or message then
+    add_sidebar_line(lines, {
+      kind = "action",
+      repo = repo,
+      action = "generate_message",
+      highlight = "Function",
+    }, "   [ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
+  end
+
+  if message then
+    add_sidebar_line(lines, {
+      kind = "status",
+      highlight = "String",
+    }, "   msg: " .. shorten(message, 28))
+  end
+
+  if message and has_changes then
+    add_sidebar_line(lines, {
+      kind = "action",
+      repo = repo,
+      action = "commit",
+      highlight = "DiffAdd",
+    }, "   [ Commit staged changes ]")
+  end
+
+  if action_state.push_available then
+    local branch_label = action_state.push_branch or trim(repo.branch)
+    add_sidebar_line(lines, {
+      kind = "action",
+      repo = repo,
+      action = "push",
+      highlight = "Identifier",
+    }, "   [ Push " .. shorten(branch_label, 18) .. " ]")
+  end
+end
+
 function M.render()
   reset_closed_handles()
 
@@ -535,15 +737,19 @@ function M.render()
       state.repo_expanded[repo.path] = true
     end
 
-    table.insert(lines, string.format(" %s %s  %s  %s", expanded and "▾" or "▸", repo.name, repo.branch, repo.summary))
-    state.line_items[#lines] = {
+    add_sidebar_line(lines, {
       kind = "repo",
       repo = repo,
-    }
+    }, string.format(" %s %s  %s  %s", expanded and "▾" or "▸", repo.name, repo.branch, repo.summary))
 
     if expanded then
+      render_repo_actions(lines, repo)
+
       if vim.tbl_isempty(repo.tree) then
-        table.insert(lines, "   No changes")
+        add_sidebar_line(lines, {
+          kind = "status",
+          highlight = "Comment",
+        }, "   No changes")
       else
         for _, node in ipairs(repo.tree) do
           render_tree_node(lines, repo, node, 1)
@@ -554,7 +760,7 @@ function M.render()
     table.insert(lines, "")
   end
 
-  table.insert(lines, "  <CR> open   <Tab> toggle")
+  table.insert(lines, "  <CR> open/run   <Tab> toggle")
   table.insert(lines, "  r refresh")
   table.insert(lines, "  q close")
 
@@ -585,6 +791,8 @@ function M.render()
       end
 
       api.nvim_buf_add_highlight(state.sidebar_buf, -1, hl, line - 1, 0, -1)
+    elseif item.highlight then
+      api.nvim_buf_add_highlight(state.sidebar_buf, -1, item.highlight, line - 1, 0, -1)
     end
   end
 
@@ -594,7 +802,220 @@ function M.render()
   end
 end
 
-local function close_extra_main_windows(keep)
+local function show_action_output(title, body_lines, filetype)
+  if not is_valid_tab(state.tabpage) then
+    return
+  end
+
+  local win = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
+  if not win then
+    return
+  end
+
+  close_extra_main_windows(win)
+  state.main_win = win
+  state.current_diff = nil
+
+  local lines = { title, "" }
+  vim.list_extend(lines, body_lines or {})
+
+  local buf = create_scratch_buffer("git-workspace://output", lines, nil, false)
+  if filetype and filetype ~= "" then
+    vim.bo[buf].filetype = filetype
+  end
+
+  api.nvim_win_set_buf(win, buf)
+  configure_main_window(win)
+  api.nvim_buf_add_highlight(buf, diff_namespace, "Title", 0, 0, -1)
+end
+
+local function run_repo_action(repo, action_name)
+  local action_state = repo_action_state(repo.path)
+  if action_state.busy then
+    notify_result("Git action already running for " .. repo.name, vim.log.levels.WARN)
+    return
+  end
+
+  if action_name == "generate_message" then
+    set_repo_action_state(repo.path, {
+      busy = "Generating commit message",
+      error = false,
+      info = false,
+    })
+    schedule_sidebar_refresh()
+
+    local output_file = vim.fn.tempname()
+    local prompt = "Write one concise Conventional Commit message for the current git changes. Output only the commit message on one line."
+    local args = {
+      "codex",
+      "exec",
+      "--ephemeral",
+      "-m",
+      "gpt-5.4-mini",
+      "-c",
+      'model_reasoning_effort="low"',
+      "-s",
+      "read-only",
+      "--color",
+      "never",
+      "-C",
+      repo.path,
+      "--output-last-message",
+      output_file,
+      prompt,
+    }
+
+    run_system_async(args, {
+      cwd = repo.path,
+      text = true,
+    }, function(result)
+      local message = ""
+      if result.code == 0 and vim.fn.filereadable(output_file) == 1 then
+        message = normalize_commit_message(table.concat(vim.fn.readfile(output_file), "\n"))
+      end
+      vim.fn.delete(output_file)
+
+      if result.code ~= 0 or message == "" then
+        set_repo_action_state(repo.path, {
+          busy = false,
+          error = trim(result.stderr or result.stdout or "Failed to generate commit message"),
+        })
+        notify_result("Failed to generate commit message for " .. repo.name, vim.log.levels.ERROR)
+        schedule_sidebar_refresh()
+        return
+      end
+
+      set_repo_action_state(repo.path, {
+        busy = false,
+        commit_message = message,
+        error = false,
+        info = "Commit message ready",
+      })
+      show_action_output("Commit Message · " .. repo.name, { message }, "gitcommit")
+      schedule_sidebar_refresh()
+    end)
+    return
+  end
+
+  if action_name == "commit" then
+    local message = trim(action_state.commit_message)
+    if message == "" then
+      notify_result("Generate a commit message first", vim.log.levels.WARN)
+      return
+    end
+
+    if vim.tbl_isempty(repo.files) then
+      notify_result("No changes to commit in " .. repo.name, vim.log.levels.WARN)
+      return
+    end
+
+    set_repo_action_state(repo.path, {
+      busy = "Running git add && git commit",
+      error = false,
+      info = false,
+    })
+    schedule_sidebar_refresh()
+
+    run_system_async({ "git", "add", "-A" }, {
+      cwd = repo.path,
+      text = true,
+    }, function(add_result)
+      if add_result.code ~= 0 then
+        set_repo_action_state(repo.path, {
+          busy = false,
+          error = trim(add_result.stderr or add_result.stdout or "git add failed"),
+        })
+        notify_result("git add failed for " .. repo.name, vim.log.levels.ERROR)
+        schedule_sidebar_refresh()
+        return
+      end
+
+      run_system_async({ "git", "commit", "-m", message }, {
+        cwd = repo.path,
+        text = true,
+      }, function(commit_result)
+        if commit_result.code ~= 0 then
+          set_repo_action_state(repo.path, {
+            busy = false,
+            error = trim(commit_result.stderr or commit_result.stdout or "git commit failed"),
+          })
+          notify_result("git commit failed for " .. repo.name, vim.log.levels.ERROR)
+          schedule_sidebar_refresh()
+          return
+        end
+
+        local branch = current_branch(repo.path)
+        local sha = run_git({ "git", "rev-parse", "--short", "HEAD" }, repo.path) or ""
+        set_repo_action_state(repo.path, {
+          busy = false,
+          error = false,
+          info = "Committed " .. trim(sha),
+          last_commit_sha = trim(sha),
+          push_available = branch ~= nil,
+          push_branch = branch,
+        })
+        show_action_output(
+          "Commit Result · " .. repo.name,
+          vim.split(trim(commit_result.stdout or "Commit created"), "\n", { trimempty = true }),
+          ""
+        )
+        schedule_sidebar_refresh()
+      end)
+    end)
+    return
+  end
+
+  if action_name == "push" then
+    local args, branch, err = push_command(repo.path)
+    if not args then
+      set_repo_action_state(repo.path, {
+        error = err,
+      })
+      notify_result(err, vim.log.levels.ERROR)
+      schedule_sidebar_refresh()
+      return
+    end
+
+    set_repo_action_state(repo.path, {
+      busy = "Pushing branch " .. branch,
+      error = false,
+      info = false,
+      push_branch = branch,
+    })
+    schedule_sidebar_refresh()
+
+    run_system_async(args, {
+      cwd = repo.path,
+      text = true,
+    }, function(push_result)
+      if push_result.code ~= 0 then
+        set_repo_action_state(repo.path, {
+          busy = false,
+          error = trim(push_result.stderr or push_result.stdout or "git push failed"),
+          push_available = true,
+        })
+        notify_result("git push failed for " .. repo.name, vim.log.levels.ERROR)
+        schedule_sidebar_refresh()
+        return
+      end
+
+      set_repo_action_state(repo.path, {
+        busy = false,
+        error = false,
+        info = "Pushed " .. branch,
+        push_available = false,
+      })
+      show_action_output(
+        "Push Result · " .. repo.name,
+        vim.split(trim(push_result.stdout or "Push completed"), "\n", { trimempty = true }),
+        ""
+      )
+      schedule_sidebar_refresh()
+    end)
+  end
+end
+
+close_extra_main_windows = function(keep)
   for _, win in ipairs(main_wins()) do
     if win ~= keep then
       pcall(api.nvim_win_close, win, true)
@@ -602,7 +1023,7 @@ local function close_extra_main_windows(keep)
   end
 end
 
-local function configure_main_window(win)
+configure_main_window = function(win)
   if not is_valid_win(win) then
     return
   end
@@ -971,6 +1392,11 @@ function M.open_selected()
 
   if item.kind == "repo" or item.kind == "dir" then
     M.toggle_selected()
+    return
+  end
+
+  if item.kind == "action" then
+    run_repo_action(item.repo, item.action)
     return
   end
 
