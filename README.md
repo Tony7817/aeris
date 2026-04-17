@@ -1,6 +1,6 @@
-# Tony's Neovim Config
+# Aeris
 
-一套偏现代 IDE 工作流的 Neovim 配置。
+Aeris 是一套偏现代 IDE 工作流的 Neovim 配置。
 
 目标很简单：
 
@@ -47,8 +47,8 @@ nvim
 ### 方式二：仓库放别处，再链接到 `~/.config/nvim`
 
 ```bash
-git clone <your-repo-url> ~/Code/nvim-config
-cd ~/Code/nvim-config
+git clone <your-repo-url> ~/Code/Aeris
+cd ~/Code/Aeris
 ./bin/install.sh
 nvim
 ```
