@@ -500,19 +500,30 @@ local function push_command(repo_path)
 end
 
 local function normalize_commit_message(text)
-  local lines = vim.split(text or "", "\n", { trimempty = true })
-  local message = ""
+  local lines = vim.split(text or "", "\n", { plain = true })
+  local cleaned = {}
 
   for _, line in ipairs(lines) do
-    line = trim(line)
-    if line ~= "" and not line:match("^```") then
-      message = line
-      break
+    line = line:gsub("\r", "")
+    if not line:match("^```") then
+      table.insert(cleaned, line)
     end
   end
 
-  message = message:gsub("^['\"]", ""):gsub("['\"]$", "")
-  return trim(message)
+  while #cleaned > 0 and trim(cleaned[1]) == "" do
+    table.remove(cleaned, 1)
+  end
+
+  while #cleaned > 0 and trim(cleaned[#cleaned]) == "" do
+    table.remove(cleaned, #cleaned)
+  end
+
+  if #cleaned == 0 then
+    return ""
+  end
+
+  cleaned[1] = cleaned[1]:gsub("^['\"]", ""):gsub("['\"]$", "")
+  return table.concat(cleaned, "\n")
 end
 
 local function selected_item()
@@ -940,7 +951,14 @@ local function run_repo_action(repo, action_name)
     schedule_sidebar_refresh()
 
     local output_file = vim.fn.tempname()
-    local prompt = "Write one concise Conventional Commit message for the current git changes. Output only the commit message on one line."
+    local prompt = table.concat({
+      "Write a detailed Conventional Commit message for the current git changes.",
+      "Requirements:",
+      "1. First line must be a specific Conventional Commit subject using feat:, fix:, refactor:, docs:, chore:, test:, or perf: as appropriate.",
+      "2. The subject must clearly say what changed, not generic wording like update or improve.",
+      "3. If there are multiple meaningful changes, add a blank line and then 2-4 concise body lines describing the important modifications.",
+      "4. Output only the commit message text. No code fences, no explanation.",
+    }, "\n")
     local args = {
       "codex",
       "exec",
@@ -1032,10 +1050,15 @@ local function run_repo_action(repo, action_name)
         return
       end
 
-      run_system_async({ "git", "commit", "-m", message }, {
+      local commit_message_file = vim.fn.tempname()
+      vim.fn.writefile(vim.split(message, "\n", { plain = true }), commit_message_file)
+
+      run_system_async({ "git", "commit", "-F", commit_message_file }, {
         cwd = repo.path,
         text = true,
       }, function(commit_result)
+        vim.fn.delete(commit_message_file)
+
         if commit_result.code ~= 0 then
           set_repo_action_state(repo.path, {
             busy = false,
