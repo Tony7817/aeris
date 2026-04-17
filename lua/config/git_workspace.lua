@@ -21,6 +21,8 @@ local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
 local diff_namespace = api.nvim_create_namespace("erwin_git_workspace_diff")
 local close_extra_main_windows
 local configure_main_window
+local current_branch
+local configured_remote
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -106,6 +108,53 @@ end
 
 local function parse_branch(first_line)
   return first_line:match("^##%s+(.*)$") or "(unknown)"
+end
+
+local function branch_push_state(repo_path)
+  local branch, err = current_branch(repo_path)
+  if not branch then
+    return {
+      branch = nil,
+      push_available = false,
+      has_upstream = false,
+      ahead = 0,
+      error = err,
+    }
+  end
+
+  local upstream = run_git({ "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" }, repo_path)
+  upstream = vim.trim(upstream or "")
+
+  if upstream ~= "" then
+    local counts = run_git({ "git", "rev-list", "--left-right", "--count", upstream .. "..." .. branch }, repo_path)
+    local behind, ahead = 0, 0
+
+    if counts then
+      local left, right = vim.trim(counts):match("^(%d+)%s+(%d+)$")
+      behind = tonumber(left) or 0
+      ahead = tonumber(right) or 0
+    end
+
+    return {
+      branch = branch,
+      push_available = ahead > 0,
+      has_upstream = true,
+      ahead = ahead,
+      behind = behind,
+      upstream = upstream,
+    }
+  end
+
+  local remote = configured_remote(repo_path, branch)
+  local head = run_git({ "git", "rev-parse", "--verify", "HEAD" }, repo_path)
+
+  return {
+    branch = branch,
+    push_available = remote ~= nil and head ~= nil,
+    has_upstream = false,
+    ahead = head and 1 or 0,
+    remote = remote,
+  }
 end
 
 local function parse_counts(lines)
@@ -373,6 +422,7 @@ local function repo_entry(path)
   local branch = lines[1] and parse_branch(lines[1]) or "(unknown)"
   local counts = parse_counts(lines)
   local files = {}
+  local push = branch_push_state(path)
 
   for _, line in ipairs(lines) do
     local entry = parse_file_status(line)
@@ -390,9 +440,11 @@ local function repo_entry(path)
     path = path,
     branch = branch,
     summary = format_counts(counts),
+    counts = counts,
     status_lines = lines,
     files = files,
     tree = build_tree(files),
+    push = push,
   }
 end
 
@@ -443,7 +495,7 @@ local function run_system_async(args, opts, callback)
   end)
 end
 
-local function current_branch(repo_path)
+current_branch = function(repo_path)
   local branch, err = run_git({ "git", "rev-parse", "--abbrev-ref", "HEAD" }, repo_path)
   branch = trim(branch)
 
@@ -454,7 +506,7 @@ local function current_branch(repo_path)
   return branch, nil
 end
 
-local function configured_remote(repo_path, branch)
+configured_remote = function(repo_path, branch)
   local remote = run_git({ "git", "config", "branch." .. branch .. ".remote" }, repo_path)
   remote = trim(remote)
   if remote ~= "" then
@@ -729,6 +781,8 @@ local function render_repo_actions(lines, repo)
   local action_state = repo_action_state(repo.path)
   local has_changes = not vim.tbl_isempty(repo.files)
   local message = action_state.commit_message
+  local show_push = repo.push and repo.push.push_available
+  local push_branch = repo.push and repo.push.branch or trim(repo.branch)
 
   if action_state.busy then
     add_sidebar_line(lines, {
@@ -747,14 +801,14 @@ local function render_repo_actions(lines, repo)
     }, "   ! " .. shorten(action_state.error, 28))
   end
 
-  if action_state.push_available then
+  if show_push then
     add_sidebar_line(lines, {
       kind = "action",
       repo = repo,
       action = "push",
       focus_target = "push",
       highlight = "Identifier",
-    }, "   [ Push " .. shorten(action_state.push_branch or trim(repo.branch), 18) .. " ]")
+    }, "   [ Push " .. shorten(push_branch, 18) .. " ]")
   end
 
   if message and has_changes then
@@ -767,7 +821,7 @@ local function render_repo_actions(lines, repo)
     }, "   [ Commit staged changes ]")
   end
 
-  if (has_changes or message) and action_state.busy_focus ~= "busy_generate_message" then
+  if has_changes and action_state.busy_focus ~= "busy_generate_message" then
     add_sidebar_line(lines, {
       kind = "action",
       repo = repo,
@@ -1071,18 +1125,16 @@ local function run_repo_action(repo, action_name)
           return
         end
 
-        local branch = current_branch(repo.path)
-        local sha = run_git({ "git", "rev-parse", "--short", "HEAD" }, repo.path) or ""
-        set_repo_action_state(repo.path, {
-          busy = false,
-          busy_focus = false,
-          error = false,
-          info = false,
-          last_commit_sha = trim(sha),
-          push_available = branch ~= nil,
-          push_branch = branch,
-        })
-        set_sidebar_focus(repo.path, "push")
+      local sha = run_git({ "git", "rev-parse", "--short", "HEAD" }, repo.path) or ""
+      set_repo_action_state(repo.path, {
+        busy = false,
+        busy_focus = false,
+        commit_message = false,
+        error = false,
+        info = false,
+        last_commit_sha = trim(sha),
+      })
+      set_sidebar_focus(repo.path, "push")
         show_action_output(
           "Commit Result · " .. repo.name,
           vim.split(trim(commit_result.stdout or "Commit created"), "\n", { trimempty = true }),
@@ -1110,8 +1162,6 @@ local function run_repo_action(repo, action_name)
       busy_focus = "busy_push",
       error = false,
       info = false,
-      push_available = true,
-      push_branch = branch,
     })
     set_sidebar_focus(repo.path, "busy_push")
     schedule_sidebar_refresh()
@@ -1125,7 +1175,6 @@ local function run_repo_action(repo, action_name)
           busy = false,
           busy_focus = false,
           error = trim(push_result.stderr or push_result.stdout or "git push failed"),
-          push_available = true,
         })
         set_sidebar_focus(repo.path, "push")
         notify_result("git push failed for " .. repo.name, vim.log.levels.ERROR)
