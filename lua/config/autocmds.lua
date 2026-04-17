@@ -110,6 +110,37 @@ local function save_workspace_file()
   write_workspace_state(state)
 end
 
+local function should_autosave(bufnr)
+  if type(bufnr) ~= "number" or not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+
+  if vim.bo[bufnr].buftype ~= "" then
+    return false
+  end
+
+  if not vim.bo[bufnr].modifiable or vim.bo[bufnr].readonly or not vim.bo[bufnr].modified then
+    return false
+  end
+
+  local name = normalize_path(vim.api.nvim_buf_get_name(bufnr))
+  if name == nil or vim.fn.isdirectory(name) == 1 then
+    return false
+  end
+
+  return true
+end
+
+local function autosave_buffer(bufnr)
+  if not should_autosave(bufnr) then
+    return
+  end
+
+  pcall(vim.api.nvim_buf_call, bufnr, function()
+    vim.cmd("silent update")
+  end)
+end
+
 local function last_workspace_file(cwd)
   cwd = normalize_path(cwd)
   if cwd == nil then
@@ -598,6 +629,20 @@ vim.api.nvim_create_autocmd("VimEnter", {
 vim.api.nvim_create_autocmd("VimLeavePre", {
   group = group,
   callback = save_workspace_file,
+})
+
+vim.api.nvim_create_autocmd("InsertLeave", {
+  group = group,
+  callback = function(args)
+    autosave_buffer(args.buf)
+  end,
+})
+
+vim.api.nvim_create_autocmd({ "BufLeave", "WinLeave", "FocusLost" }, {
+  group = group,
+  callback = function(args)
+    autosave_buffer(args.buf)
+  end,
 })
 
 vim.api.nvim_create_autocmd("TermOpen", {
