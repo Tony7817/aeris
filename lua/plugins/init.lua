@@ -253,6 +253,86 @@ return {
     },
   },
   {
+    "petertriho/nvim-scrollbar",
+    event = { "BufReadPre", "BufNewFile" },
+    dependencies = {
+      "lewis6991/gitsigns.nvim",
+    },
+    config = function()
+      require("scrollbar").setup({
+        hide_if_all_visible = false,
+        set_highlights = false,
+        show_in_active_only = false,
+        handle = {
+          blend = 0,
+          color = nil,
+          highlight = "ScrollbarHandle",
+          hide_if_all_visible = false,
+          text = " ",
+        },
+        marks = {
+          Cursor = {
+            color = nil,
+            gui = nil,
+            highlight = "ScrollbarCursor",
+            priority = 0,
+            text = "•",
+          },
+          GitAdd = {
+            color = nil,
+            gui = nil,
+            highlight = "ScrollbarGitAdd",
+            priority = 7,
+            text = "▏",
+          },
+          GitChange = {
+            color = nil,
+            gui = nil,
+            highlight = "ScrollbarGitChange",
+            priority = 7,
+            text = "▏",
+          },
+          GitDelete = {
+            color = nil,
+            gui = nil,
+            highlight = "ScrollbarGitDelete",
+            priority = 7,
+            text = "▏",
+          },
+        },
+        excluded_buftypes = {
+          "prompt",
+          "terminal",
+        },
+        excluded_filetypes = {
+          "DressingInput",
+          "NvimTree",
+          "TelescopePrompt",
+          "blink-cmp-menu",
+          "cmp_docs",
+          "cmp_menu",
+          "dropbar_menu",
+          "dropbar_menu_fzf",
+          "erwin-git-workspace",
+          "erwin-reference-preview",
+          "erwin-references",
+          "erwin-terminals",
+          "noice",
+        },
+        handlers = {
+          ale = false,
+          cursor = true,
+          diagnostic = false,
+          gitsigns = true,
+          handle = true,
+          search = false,
+        },
+      })
+
+      require("scrollbar.handlers.gitsigns").setup()
+    end,
+  },
+  {
     "nvim-lua/plenary.nvim",
     lazy = true,
   },
