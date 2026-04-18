@@ -106,6 +106,26 @@ return {
     },
   },
   {
+    "iamcco/markdown-preview.nvim",
+    ft = { "markdown" },
+    cmd = {
+      "MarkdownPreview",
+      "MarkdownPreviewStop",
+      "MarkdownPreviewToggle",
+    },
+    build = function()
+      vim.fn["mkdp#util#install"]()
+    end,
+    init = function()
+      vim.g.mkdp_auto_start = 0
+      vim.g.mkdp_auto_close = 1
+      vim.g.mkdp_refresh_slow = 0
+      vim.g.mkdp_browser = ""
+      vim.g.mkdp_filetypes = { "markdown" }
+      vim.g.mkdp_theme = "dark"
+    end,
+  },
+  {
     "nvim-lualine/lualine.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     opts = {
@@ -175,6 +195,7 @@ return {
         { "<leader>c", group = "Code" },
         { "<leader>f", group = "Find" },
         { "<leader>g", group = "Git" },
+        { "<leader>m", group = "Markdown" },
         { "<leader>t", group = "Terminal" },
       },
     },
