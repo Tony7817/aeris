@@ -53,6 +53,45 @@ local function write_workspace_state(state)
   vim.fn.writefile(vim.split(encoded, "\n", { plain = true }), workspace_state_path)
 end
 
+local function normalize_cursor(cursor)
+  if type(cursor) ~= "table" then
+    return nil
+  end
+
+  local line = tonumber(cursor[1] or cursor.line)
+  local col = tonumber(cursor[2] or cursor.col or cursor.column)
+
+  if line == nil or col == nil then
+    return nil
+  end
+
+  return {
+    math.max(1, math.floor(line)),
+    math.max(0, math.floor(col)),
+  }
+end
+
+local function normalize_workspace_entry(entry, cwd)
+  local file
+  local cursor
+
+  if type(entry) == "string" then
+    file = normalize_path(entry)
+  elseif type(entry) == "table" then
+    file = normalize_path(entry.file or entry.path)
+    cursor = normalize_cursor(entry.cursor)
+  end
+
+  if not is_real_file(file) or not is_path_in_cwd(file, cwd) then
+    return nil
+  end
+
+  return {
+    file = file,
+    cursor = cursor,
+  }
+end
+
 local function workspace_file_candidates()
   local candidates = {}
   local seen = {}
@@ -79,17 +118,59 @@ local function workspace_file_candidates()
   return candidates
 end
 
-local function find_workspace_file(cwd)
+local function find_workspace_location(cwd)
   cwd = normalize_path(cwd)
   if cwd == nil then
     return nil
+  end
+
+  local current_win = vim.api.nvim_get_current_win()
+  local seen_windows = {}
+
+  local function location_from_window(win)
+    if type(win) ~= "number" or not vim.api.nvim_win_is_valid(win) or seen_windows[win] then
+      return nil
+    end
+
+    seen_windows[win] = true
+
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    if not vim.api.nvim_buf_is_valid(bufnr) or vim.bo[bufnr].buftype ~= "" then
+      return nil
+    end
+
+    local name = normalize_path(vim.api.nvim_buf_get_name(bufnr))
+    if not is_real_file(name) or not is_path_in_cwd(name, cwd) then
+      return nil
+    end
+
+    local ok, cursor = pcall(vim.api.nvim_win_get_cursor, win)
+    return {
+      file = name,
+      cursor = ok and normalize_cursor(cursor) or nil,
+    }
+  end
+
+  local current_location = location_from_window(current_win)
+  if current_location then
+    return current_location
+  end
+
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local location = location_from_window(win)
+    if location then
+      return location
+    end
   end
 
   for _, bufnr in ipairs(workspace_file_candidates()) do
     if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buftype == "" then
       local name = normalize_path(vim.api.nvim_buf_get_name(bufnr))
       if is_real_file(name) and is_path_in_cwd(name, cwd) then
-        return name
+        return {
+          file = name,
+          cursor = nil,
+        }
       end
     end
   end
@@ -99,14 +180,17 @@ end
 
 local function save_workspace_file()
   local cwd = normalize_path(vim.fn.getcwd())
-  local file = find_workspace_file(cwd)
+  local location = find_workspace_location(cwd)
 
-  if cwd == nil or file == nil then
+  if cwd == nil or location == nil then
     return
   end
 
   local state = read_workspace_state()
-  state[cwd] = file
+  state[cwd] = {
+    file = location.file,
+    cursor = location.cursor,
+  }
   write_workspace_state(state)
 end
 
@@ -141,20 +225,33 @@ local function autosave_buffer(bufnr)
   end)
 end
 
-local function last_workspace_file(cwd)
+local function last_workspace_location(cwd)
   cwd = normalize_path(cwd)
   if cwd == nil then
     return nil
   end
 
   local state = read_workspace_state()
-  local file = normalize_path(state[cwd])
-
-  if not is_real_file(file) or not is_path_in_cwd(file, cwd) then
+  local entry = normalize_workspace_entry(state[cwd], cwd)
+  if entry == nil then
     return nil
   end
 
-  return file
+  return entry
+end
+
+local function restore_workspace_cursor(win, bufnr, cursor)
+  cursor = normalize_cursor(cursor)
+  if cursor == nil or not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local line_count = math.max(vim.api.nvim_buf_line_count(bufnr), 1)
+  local line = math.min(cursor[1], line_count)
+  local line_text = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
+  local col = math.min(cursor[2], #line_text)
+
+  pcall(vim.api.nvim_win_set_cursor, win, { line, col })
 end
 
 local function ensure_buffer_highlighting(bufnr)
@@ -674,15 +771,14 @@ vim.api.nvim_create_autocmd("VimEnter", {
       mark_as_workspace_placeholder(content_buf)
     end
 
+    local workspace_entry = nil
+
     if should_restore_workspace_file then
-      local file = last_workspace_file(vim.fn.getcwd())
-      if file then
+      workspace_entry = last_workspace_location(vim.fn.getcwd())
+      if workspace_entry then
         vim.api.nvim_set_current_win(content_win)
-        vim.cmd("silent edit " .. vim.fn.fnameescape(file))
+        vim.cmd("silent edit " .. vim.fn.fnameescape(workspace_entry.file))
         content_buf = vim.api.nvim_get_current_buf()
-        vim.schedule(function()
-          ensure_buffer_highlighting(content_buf)
-        end)
       end
     end
 
@@ -706,6 +802,17 @@ vim.api.nvim_create_autocmd("VimEnter", {
 
     if vim.api.nvim_win_is_valid(tree_win) then
       vim.api.nvim_set_current_win(tree_win)
+    end
+
+    if workspace_entry then
+      vim.schedule(function()
+        ensure_buffer_highlighting(content_buf)
+        restore_workspace_cursor(content_win, content_buf, workspace_entry.cursor)
+      end)
+    elseif vim.api.nvim_buf_get_name(content_buf) ~= "" then
+      vim.schedule(function()
+        ensure_buffer_highlighting(content_buf)
+      end)
     end
   end,
 })
