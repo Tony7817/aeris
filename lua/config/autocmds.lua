@@ -74,12 +74,26 @@ end
 local function normalize_workspace_entry(entry, cwd)
   local file
   local cursor
+  local focus
 
   if type(entry) == "string" then
     file = normalize_path(entry)
   elseif type(entry) == "table" then
     file = normalize_path(entry.file or entry.path)
     cursor = normalize_cursor(entry.cursor)
+    if type(entry.focus) == "table" then
+      local kind = entry.focus.kind == "tree" and "tree" or "file"
+      local path = normalize_path(entry.focus.path)
+      if path ~= nil and not is_path_in_cwd(path, cwd) then
+        path = nil
+      end
+
+      focus = {
+        kind = kind,
+        path = path,
+        cursor = normalize_cursor(entry.focus.cursor),
+      }
+    end
   end
 
   if not is_real_file(file) or not is_path_in_cwd(file, cwd) then
@@ -89,6 +103,11 @@ local function normalize_workspace_entry(entry, cwd)
   return {
     file = file,
     cursor = cursor,
+    focus = focus or {
+      kind = "file",
+      path = file,
+      cursor = cursor,
+    },
   }
 end
 
@@ -178,9 +197,63 @@ local function find_workspace_location(cwd)
   return nil
 end
 
+local function current_workspace_focus(cwd)
+  cwd = normalize_path(cwd)
+  if cwd == nil then
+    return nil
+  end
+
+  local current_win = vim.api.nvim_get_current_win()
+  if not vim.api.nvim_win_is_valid(current_win) then
+    return nil
+  end
+
+  local bufnr = vim.api.nvim_win_get_buf(current_win)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return nil
+  end
+
+  local cursor = normalize_cursor(vim.api.nvim_win_get_cursor(current_win))
+  local filetype = vim.bo[bufnr].filetype
+
+  if filetype == "NvimTree" then
+    local focus = {
+      kind = "tree",
+      cursor = cursor,
+    }
+
+    local ok, tree_api = pcall(require, "nvim-tree.api")
+    if ok then
+      local node = tree_api.tree.get_node_under_cursor()
+      local path = node and normalize_path(node.absolute_path)
+      if path ~= nil and is_path_in_cwd(path, cwd) then
+        focus.path = path
+      end
+    end
+
+    return focus
+  end
+
+  if vim.bo[bufnr].buftype ~= "" then
+    return nil
+  end
+
+  local name = normalize_path(vim.api.nvim_buf_get_name(bufnr))
+  if not is_real_file(name) or not is_path_in_cwd(name, cwd) then
+    return nil
+  end
+
+  return {
+    kind = "file",
+    path = name,
+    cursor = cursor,
+  }
+end
+
 local function save_workspace_file()
   local cwd = normalize_path(vim.fn.getcwd())
   local location = find_workspace_location(cwd)
+  local focus = current_workspace_focus(cwd)
 
   if cwd == nil or location == nil then
     return
@@ -190,6 +263,7 @@ local function save_workspace_file()
   state[cwd] = {
     file = location.file,
     cursor = location.cursor,
+    focus = focus,
   }
   write_workspace_state(state)
 end
@@ -800,19 +874,36 @@ vim.api.nvim_create_autocmd("VimEnter", {
       })
     end
 
-    if vim.api.nvim_win_is_valid(tree_win) then
-      vim.api.nvim_set_current_win(tree_win)
-    end
-
     if workspace_entry then
       vim.schedule(function()
         ensure_buffer_highlighting(content_buf)
         restore_workspace_cursor(content_win, content_buf, workspace_entry.cursor)
+
+        local focus = workspace_entry.focus or { kind = "file" }
+        if focus.kind == "tree" and vim.api.nvim_win_is_valid(tree_win) then
+          if focus.path then
+            tree_api.tree.find_file({
+              buf = focus.path,
+              focus = true,
+              open = false,
+              update_root = true,
+            })
+          else
+            vim.api.nvim_set_current_win(tree_win)
+          end
+        elseif vim.api.nvim_win_is_valid(content_win) then
+          vim.api.nvim_set_current_win(content_win)
+        end
       end)
     elseif vim.api.nvim_buf_get_name(content_buf) ~= "" then
       vim.schedule(function()
         ensure_buffer_highlighting(content_buf)
+        if vim.api.nvim_win_is_valid(tree_win) then
+          vim.api.nvim_set_current_win(tree_win)
+        end
       end)
+    elseif vim.api.nvim_win_is_valid(tree_win) then
+      vim.api.nvim_set_current_win(tree_win)
     end
   end,
 })
