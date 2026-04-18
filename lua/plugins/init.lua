@@ -181,7 +181,14 @@ return {
   },
   {
     "numToStr/Comment.nvim",
-    opts = {},
+    opts = {
+      toggler = {
+        block = "gBC",
+      },
+      opleader = {
+        block = "gB",
+      },
+    },
   },
   {
     "windwp/nvim-autopairs",
