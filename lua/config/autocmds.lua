@@ -204,7 +204,7 @@ local function apply_ui_highlights()
   local normal_bg = "#2B3036"
   local normal_fg = normal.fg
   local nvim_tree_bg = "#1F2428"
-  local terminal_bg = "#1E2429"
+  local terminal_bg = nvim_tree_bg
   local vscode = {
     bracket1 = "#b392f0",
     bracket2 = "#ec619c",
@@ -240,6 +240,8 @@ local function apply_ui_highlights()
   vim.api.nvim_set_hl(0, "NvimTreeEndOfBuffer", { fg = end_of_buffer.fg, bg = nvim_tree_bg })
   vim.api.nvim_set_hl(0, "NvimTreeSignColumn", { fg = normal_fg, bg = nvim_tree_bg })
   vim.api.nvim_set_hl(0, "NvimTreeWinSeparator", { fg = "#585b70", bg = nvim_tree_bg })
+  vim.api.nvim_set_hl(0, "TerminalSidebarNormal", { fg = normal_fg, bg = nvim_tree_bg })
+  vim.api.nvim_set_hl(0, "TerminalSidebarEndOfBuffer", { fg = end_of_buffer.fg, bg = nvim_tree_bg })
   local opened_file = vim.api.nvim_get_hl(0, { name = "NvimTreeOpenedFile", link = false })
   local popup_bg = opened_file.fg or 0x89B4FA
   vim.api.nvim_set_hl(0, "NvimTreeNamePopup", { fg = normal_bg, bg = popup_bg, bold = true })

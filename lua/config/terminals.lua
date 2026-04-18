@@ -171,7 +171,7 @@ local function configure_sidebar_window(win)
   vim.wo[win].wrap = false
   vim.wo[win].winblend = 0
   vim.wo[win].winhighlight =
-    "Normal:NormalFloat,NormalNC:NormalFloat,EndOfBuffer:NormalFloat,WinSeparator:WinSeparator,CursorLine:Visual"
+    "Normal:TerminalSidebarNormal,NormalNC:TerminalSidebarNormal,EndOfBuffer:TerminalSidebarEndOfBuffer,WinSeparator:WinSeparator,CursorLine:Visual"
 end
 
 local function attach_sidebar(term)
