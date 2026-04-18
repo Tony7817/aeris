@@ -15,6 +15,8 @@ local state = {
   repo_actions = {},
   sidebar_focus = nil,
   sidebar_width = 38,
+  refresh_timer = nil,
+  repo_snapshot = nil,
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
@@ -40,6 +42,14 @@ local function is_valid_tab(tabpage)
   return tabpage ~= nil and api.nvim_tabpage_is_valid(tabpage)
 end
 
+local function stop_refresh_timer()
+  if state.refresh_timer ~= nil then
+    state.refresh_timer:stop()
+    state.refresh_timer:close()
+    state.refresh_timer = nil
+  end
+end
+
 local function in_git_tab(win)
   return is_valid_tab(state.tabpage) and is_valid_win(win) and api.nvim_win_get_tabpage(win) == state.tabpage
 end
@@ -50,6 +60,8 @@ local function reset_closed_handles()
     state.sidebar_win = nil
     state.main_win = nil
     state.current_diff = nil
+    state.repo_snapshot = nil
+    stop_refresh_timer()
   end
 
   if not is_valid_win(state.sidebar_win) then
@@ -210,6 +222,25 @@ local function format_counts(counts)
   end
 
   return table.concat(parts, " ")
+end
+
+local function repo_status_snapshot(repos)
+  local chunks = {}
+
+  for _, repo in ipairs(repos) do
+    local push = repo.push or {}
+    chunks[#chunks + 1] = table.concat({
+      repo.path,
+      repo.branch or "",
+      repo.summary or "",
+      tostring(push.push_available or false),
+      tostring(push.has_upstream or false),
+      tostring(push.ahead or 0),
+      table.concat(repo.status_lines or {}, "\n"),
+    }, "\n")
+  end
+
+  return table.concat(chunks, "\n---\n")
 end
 
 local function trim(text)
@@ -479,6 +510,26 @@ local function schedule_sidebar_refresh()
       M.refresh()
     end
   end)
+end
+
+local function start_refresh_timer()
+  if state.refresh_timer ~= nil then
+    return
+  end
+
+  state.refresh_timer = assert(uv.new_timer())
+  state.refresh_timer:start(60000, 60000, vim.schedule_wrap(function()
+    reset_closed_handles()
+    if not is_valid_tab(state.tabpage) or not is_valid_buf(state.sidebar_buf) then
+      return
+    end
+
+    local repos = M.collect()
+    local snapshot = repo_status_snapshot(repos)
+    if snapshot ~= state.repo_snapshot then
+      M.render(repos)
+    end
+  end))
 end
 
 local function notify_result(message, level)
@@ -840,14 +891,15 @@ local function render_repo_actions(lines, repo)
   end
 end
 
-function M.render()
+function M.render(repos)
   reset_closed_handles()
 
   if not is_valid_buf(state.sidebar_buf) then
     return
   end
 
-  local repos = M.collect()
+  repos = repos or M.collect()
+  state.repo_snapshot = repo_status_snapshot(repos)
   local lines = {
     " Source Control",
     "",
@@ -1605,7 +1657,6 @@ function M.refresh()
     return
   end
 
-  api.nvim_set_current_tabpage(state.tabpage)
   M.render()
 end
 
@@ -1641,6 +1692,8 @@ function M.close()
   state.sidebar_win = nil
   state.main_win = nil
   state.current_diff = nil
+  state.repo_snapshot = nil
+  stop_refresh_timer()
 
   if api.nvim_get_current_tabpage() == tabpage then
     vim.cmd("tabclose")
@@ -1680,6 +1733,7 @@ end
 
 function M.open()
   ensure_layout()
+  start_refresh_timer()
 end
 
 api.nvim_create_autocmd("TabClosed", {
