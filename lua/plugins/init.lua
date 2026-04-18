@@ -242,6 +242,29 @@ return {
     opts = {
       direction = "horizontal",
       close_on_exit = false,
+      highlights = {
+        Normal = {
+          guibg = "#1F2428",
+        },
+        EndOfBuffer = {
+          guibg = "#1F2428",
+        },
+        SignColumn = {
+          guibg = "#1F2428",
+        },
+        StatusLine = {
+          guibg = "#1F2428",
+        },
+        StatusLineNC = {
+          guibg = "#1F2428",
+        },
+        NormalFloat = {
+          guibg = "#1F2428",
+        },
+        FloatBorder = {
+          guibg = "#1F2428",
+        },
+      },
       persist_size = false,
       persist_mode = true,
       shade_terminals = false,
