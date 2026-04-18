@@ -58,6 +58,16 @@ local function get_terms()
   return terminals().get_all(true)
 end
 
+local function current_window_term_id()
+  local bufnr = api.nvim_get_current_buf()
+  if vim.bo[bufnr].filetype ~= "toggleterm" then
+    return nil
+  end
+
+  local term_id = vim.b[bufnr].toggle_number
+  return type(term_id) == "number" and term_id or nil
+end
+
 local function remember_main_window()
   local win = api.nvim_get_current_win()
   if (sidebar_is_open() and win == state.sidebar_win) or not is_primary_window(win) then
@@ -371,6 +381,22 @@ function M.open_selected()
   if term_id then
     M.open_terminal(term_id)
   end
+end
+
+function M.hide_current()
+  local term_id = current_window_term_id() or active_term_id()
+  local term = term_id and get_term(term_id) or nil
+
+  close_sidebar_window()
+
+  if not term or not term:is_open() then
+    focus_main_window()
+    return
+  end
+
+  state.active_id = term.id
+  term:close()
+  vim.schedule(focus_main_window)
 end
 
 function M.new_terminal()
