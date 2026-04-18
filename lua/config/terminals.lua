@@ -26,6 +26,19 @@ local function is_valid_win(win)
   return win ~= nil and api.nvim_win_is_valid(win)
 end
 
+local function window_filetype(win)
+  if not is_valid_win(win) then
+    return nil
+  end
+
+  return vim.bo[api.nvim_win_get_buf(win)].filetype
+end
+
+local function is_primary_window(win)
+  local filetype = window_filetype(win)
+  return filetype ~= "NvimTree" and filetype ~= "erwin-terminals"
+end
+
 local function sidebar_is_open()
   return is_valid_win(state.sidebar_win)
 end
@@ -47,7 +60,7 @@ end
 
 local function remember_main_window()
   local win = api.nvim_get_current_win()
-  if sidebar_is_open() and win == state.sidebar_win then
+  if (sidebar_is_open() and win == state.sidebar_win) or not is_primary_window(win) then
     return
   end
   state.last_main_win = win
@@ -79,17 +92,42 @@ local function get_sidebar_line_for_term(term_id)
 end
 
 local function focus_main_window()
-  if is_valid_win(state.last_main_win) and state.last_main_win ~= state.sidebar_win then
+  if is_valid_win(state.last_main_win) and state.last_main_win ~= state.sidebar_win and is_primary_window(state.last_main_win) then
     api.nvim_set_current_win(state.last_main_win)
     return
   end
 
   for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
-    if not sidebar_is_open() or win ~= state.sidebar_win then
+    if (not sidebar_is_open() or win ~= state.sidebar_win) and is_primary_window(win) then
       state.last_main_win = win
       api.nvim_set_current_win(win)
       return
     end
+  end
+end
+
+local function find_tree_window()
+  for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
+    if window_filetype(win) == "NvimTree" then
+      return win
+    end
+  end
+end
+
+local function restore_tree_column_layout()
+  local tree_win = find_tree_window()
+  if not is_valid_win(tree_win) then
+    return
+  end
+
+  local current_win = api.nvim_get_current_win()
+  api.nvim_set_current_win(tree_win)
+  vim.cmd("wincmd H")
+  vim.cmd("vertical resize 22")
+  vim.wo[tree_win].winfixwidth = true
+
+  if is_valid_win(current_win) and current_win ~= tree_win then
+    api.nvim_set_current_win(current_win)
   end
 end
 
@@ -278,6 +316,7 @@ function M.open_sidebar(opts)
   end
 
   remember_main_window()
+  restore_tree_column_layout()
   attach_sidebar(term)
   M.render_sidebar()
 
@@ -318,10 +357,13 @@ function M.open_terminal(term_id)
   end
 
   state.active_id = term.id
-  if sidebar_is_open() then
-    attach_sidebar(term)
-  end
-  vim.schedule(M.render_sidebar)
+  vim.schedule(function()
+    restore_tree_column_layout()
+    if sidebar_is_open() then
+      attach_sidebar(term)
+    end
+    M.render_sidebar()
+  end)
 end
 
 function M.open_selected()
@@ -348,6 +390,7 @@ function M.new_terminal()
     on_open = function(opened_term)
       state.active_id = opened_term.id
       vim.schedule(function()
+        restore_tree_column_layout()
         if sidebar_is_open() then
           attach_sidebar(opened_term)
         end
@@ -366,6 +409,7 @@ function M.new_terminal()
     vim.schedule(M.open_sidebar)
   else
     vim.schedule(function()
+      restore_tree_column_layout()
       local opened_term = get_term(term.id)
       if opened_term and opened_term:is_open() then
         attach_sidebar(opened_term)
