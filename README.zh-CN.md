@@ -22,6 +22,16 @@ Aeris 是一套偏现代 IDE 工作流的 Neovim 配置，目标是 clone 下来
 - Git 工作流，支持 Codex 自动生成 commit message
 - Markdown 渲染支持
 
+## 界面展示
+
+代码编辑界面：
+
+![代码编辑界面](./assets/1.png)
+
+Git 工作区界面：
+
+![Git 工作区界面](./assets/2.png)
+
 ## 系统要求
 
 基础要求：

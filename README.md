@@ -22,6 +22,16 @@ Goals:
 - Git workflow with Codex-generated commit messages
 - Markdown rendering support
 
+## Screenshots
+
+Code editing interface:
+
+![Code editing interface](./assets/1.png)
+
+Git workspace interface:
+
+![Git workspace interface](./assets/2.png)
+
 ## Requirements
 
 Base requirements:
