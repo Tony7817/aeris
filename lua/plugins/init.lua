@@ -118,6 +118,23 @@ return {
       vim.g.mkdp_auto_start = 0
       vim.g.mkdp_auto_close = 1
       vim.g.mkdp_echo_preview_url = 1
+      vim.g.mkdp_markdown_css = vim.fn.stdpath("config") .. "/after/markdown-preview.css"
+      vim.g.mkdp_preview_options = {
+        uml = {
+          imageFormat = "svg",
+        },
+        maid = {
+          flowchart = {
+            useMaxWidth = false,
+          },
+          sequence = {
+            useMaxWidth = false,
+          },
+          gantt = {
+            useMaxWidth = false,
+          },
+        },
+      }
       vim.g.mkdp_refresh_slow = 0
       vim.g.mkdp_browser = ""
       vim.g.mkdp_filetypes = { "markdown" }

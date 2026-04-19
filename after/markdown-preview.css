@@ -1,0 +1,46 @@
+body {
+  font-size: 16px;
+}
+
+#page-ctn {
+  max-width: none !important;
+  width: auto !important;
+  min-width: 100%;
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+  overflow-x: auto;
+}
+
+.markdown-body {
+  max-width: none !important;
+}
+
+.markdown-body .mermaid {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 12px 0 16px;
+}
+
+.markdown-body .mermaid svg {
+  display: block;
+  max-width: none !important;
+  height: auto !important;
+}
+
+.markdown-body .mermaid text,
+.markdown-body .mermaid foreignObject,
+.markdown-body .mermaid foreignObject *,
+.markdown-body .mermaid .label,
+.markdown-body .mermaid .nodeLabel,
+.markdown-body .mermaid .edgeLabel {
+  font-size: 18px !important;
+}
+
+.markdown-body img[src*="/plantuml/"],
+.markdown-body img[src*="plantuml.com"] {
+  display: block;
+  max-width: none !important;
+  height: auto !important;
+  margin: 1rem 0;
+}
