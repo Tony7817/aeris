@@ -20,6 +20,63 @@ local function goto_git_change(direction)
   gitsigns.nav_hunk(direction, { target = "all" })
 end
 
+local function refresh_lualine_statusline()
+  local ok, lualine = pcall(require, "lualine")
+  if ok then
+    lualine.refresh({
+      place = { "statusline" },
+      scope = "all",
+    })
+  end
+end
+
+local function set_telescope_status_path(path)
+  vim.g.aeris_telescope_status_path = path or ""
+  refresh_lualine_statusline()
+end
+
+local function telescope_entry_path(entry)
+  if type(entry) ~= "table" then
+    return ""
+  end
+
+  local path = entry.path or entry.filename or entry.value
+  if type(path) ~= "string" or path == "" then
+    return ""
+  end
+
+  return vim.fn.fnamemodify(path, ":p")
+end
+
+local function attach_telescope_statusline(prompt_bufnr)
+  local action_state = require("telescope.actions.state")
+  local picker = action_state.get_current_picker(prompt_bufnr)
+  if picker == nil then
+    return true
+  end
+
+  local function update()
+    set_telescope_status_path(telescope_entry_path(action_state.get_selected_entry()))
+  end
+
+  local original_set_selection = picker.set_selection
+  picker.set_selection = function(self, row)
+    original_set_selection(self, row)
+    update()
+  end
+
+  vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout" }, {
+    buffer = prompt_bufnr,
+    once = true,
+    callback = function()
+      set_telescope_status_path("")
+    end,
+  })
+
+  vim.schedule(update)
+  return true
+end
+
 map("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear search highlight" })
 map("n", "<leader>w", "<cmd>write<CR>", { desc = "Write buffer" })
 map("n", "<leader>q", "<cmd>quit<CR>", { desc = "Quit window" })
@@ -82,6 +139,9 @@ map("t", "<C-l>", "<Cmd>wincmd l<CR>", { desc = "Focus right split" })
 map("n", "<leader>ff", function()
   require("telescope.builtin").find_files({
     hidden = true,
+    attach_mappings = function(prompt_bufnr)
+      return attach_telescope_statusline(prompt_bufnr)
+    end,
   })
 end, { desc = "Find files" })
 

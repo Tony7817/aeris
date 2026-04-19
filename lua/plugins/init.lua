@@ -8,6 +8,19 @@ local function workspace_name()
   return name ~= "" and name or cwd
 end
 
+local function telescope_selected_path()
+  local path = vim.g.aeris_telescope_status_path
+  if type(path) ~= "string" or path == "" then
+    return ""
+  end
+
+  return path
+end
+
+local function telescope_path_visible()
+  return telescope_selected_path() ~= ""
+end
+
 local function shorten_blame_summary(summary, max_chars)
   summary = vim.trim(summary or "")
   if summary == "" then
@@ -157,7 +170,18 @@ return {
           workspace_name,
           "branch",
         },
-        lualine_c = { "filename" },
+        lualine_c = {
+          {
+            "filename",
+            cond = function()
+              return not telescope_path_visible()
+            end,
+          },
+          {
+            telescope_selected_path,
+            cond = telescope_path_visible,
+          },
+        },
         lualine_x = { "encoding", "fileformat", "filetype" },
         lualine_y = { "progress" },
         lualine_z = { "location" },
