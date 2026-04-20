@@ -113,6 +113,12 @@ local function attach_telescope_statusline(prompt_bufnr)
   return true
 end
 
+local function widen_file_tree()
+  local tree_width = require("config.tree_width")
+  tree_width.increase()
+  tree_width.apply()
+end
+
 map("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear search highlight" })
 map("n", "<leader>w", "<cmd>write<CR>", { desc = "Write buffer" })
 map("n", "<leader>q", "<cmd>quit<CR>", { desc = "Quit window" })
@@ -122,6 +128,7 @@ map("n", "<D-Left>", jump_back, { desc = "Jump back" })
 map("n", "<D-Right>", "<C-i>", { desc = "Jump forward" })
 map("n", "<leader>e", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle file tree" })
 map("n", "<leader>E", "<cmd>NvimTreeFocus<CR>", { desc = "Focus file tree" })
+map("n", "<leader>]", widen_file_tree, { desc = "Widen file tree" })
 map("n", "<Tab>", "<cmd>BufferLineCycleNext<CR>", { desc = "Next buffer tab" })
 map("n", "<S-Tab>", "<cmd>BufferLineCyclePrev<CR>", { desc = "Previous buffer tab" })
 map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Close buffer" })

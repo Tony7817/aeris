@@ -133,7 +133,7 @@ local function restore_tree_column_layout()
   local current_win = api.nvim_get_current_win()
   api.nvim_set_current_win(tree_win)
   vim.cmd("wincmd H")
-  vim.cmd("vertical resize 22")
+  vim.cmd(string.format("vertical resize %d", require("config.tree_width").get()))
   vim.wo[tree_win].winfixwidth = true
 
   if is_valid_win(current_win) and current_win ~= tree_win then

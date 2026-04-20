@@ -876,10 +876,11 @@ vim.api.nvim_create_autocmd("VimEnter", {
       end
     end
 
-    vim.cmd("topleft vertical 22new")
+    local tree_width = require("config.tree_width").get()
+    vim.cmd(string.format("topleft vertical %dnew", tree_width))
     local tree_win = vim.api.nvim_get_current_win()
     tree_api.tree.open({ current_window = true, path = vim.fn.getcwd() })
-    vim.cmd("vertical resize 22")
+    vim.cmd(string.format("vertical resize %d", tree_width))
 
     if vim.api.nvim_win_is_valid(tree_win) then
       vim.wo[tree_win].winfixwidth = true

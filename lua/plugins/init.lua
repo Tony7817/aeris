@@ -295,11 +295,9 @@ return {
         preserve_window_proportions = false,
         side = "left",
         signcolumn = "yes",
-        width = {
-          min = 22,
-          max = 22,
-          padding = 0,
-        },
+        width = function()
+          return require("config.tree_width").get()
+        end,
       },
     },
   },

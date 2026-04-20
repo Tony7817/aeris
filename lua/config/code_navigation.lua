@@ -77,14 +77,15 @@ local function open_workspace_file(path, cursor, workspace_root)
 
   local ok, tree_api = pcall(require, "nvim-tree.api")
   if ok then
-    vim.cmd("topleft vertical 22new")
+    local tree_width = require("config.tree_width").get()
+    vim.cmd(string.format("topleft vertical %dnew", tree_width))
 
     local tree_win = api.nvim_get_current_win()
     tree_api.tree.open({
       current_window = true,
       path = workspace_root and workspace_root ~= "" and workspace_root or vim.fn.getcwd(),
     })
-    vim.cmd("vertical resize 22")
+    vim.cmd(string.format("vertical resize %d", tree_width))
 
     if api.nvim_win_is_valid(tree_win) then
       vim.wo[tree_win].winfixwidth = true
