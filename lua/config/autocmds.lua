@@ -328,6 +328,32 @@ local function restore_workspace_cursor(win, bufnr, cursor)
   pcall(vim.api.nvim_win_set_cursor, win, { line, col })
 end
 
+local function try_restore_workspace_file(win, file)
+  file = normalize_path(file)
+  if file == nil or not vim.api.nvim_win_is_valid(win) then
+    return false, nil, nil
+  end
+
+  vim.api.nvim_set_current_win(win)
+
+  local ok, err = pcall(vim.cmd, "silent edit " .. vim.fn.fnameescape(file))
+  if ok then
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    if normalize_path(vim.api.nvim_buf_get_name(bufnr)) == file then
+      return true, bufnr, nil
+    end
+
+    return false, nil, "Failed to restore workspace file"
+  end
+
+  local message = tostring(err or "")
+  if message:find("E325", 1, true) then
+    return false, nil, "Swap file exists for the last workspace file"
+  end
+
+  return false, nil, message
+end
+
 local function ensure_buffer_highlighting(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) or vim.bo[bufnr].buftype ~= "" then
     return
@@ -931,13 +957,22 @@ vim.api.nvim_create_autocmd("VimEnter", {
     end
 
     local workspace_entry = nil
+    local workspace_restore_file = nil
+    local workspace_restore_error = nil
 
     if should_restore_workspace_file then
       workspace_entry = last_workspace_location(vim.fn.getcwd())
       if workspace_entry then
+        workspace_restore_file = workspace_entry.file
         vim.api.nvim_set_current_win(content_win)
-        vim.cmd("silent edit " .. vim.fn.fnameescape(workspace_entry.file))
-        content_buf = vim.api.nvim_get_current_buf()
+        local restored, restored_buf, err = try_restore_workspace_file(content_win, workspace_entry.file)
+        if restored then
+          content_buf = restored_buf
+        else
+          workspace_restore_error = err
+          workspace_entry = nil
+          mark_as_workspace_placeholder(content_buf)
+        end
       end
     end
 
@@ -990,6 +1025,17 @@ vim.api.nvim_create_autocmd("VimEnter", {
       end)
     elseif vim.api.nvim_win_is_valid(tree_win) then
       vim.api.nvim_set_current_win(tree_win)
+    end
+
+    if workspace_restore_error and should_restore_workspace_file then
+      local file_label = workspace_restore_file and vim.fn.fnamemodify(workspace_restore_file, ":~:.")
+        or "the last workspace file"
+      vim.schedule(function()
+        vim.notify(
+          string.format("Skipped workspace restore for %s: %s", file_label, workspace_restore_error),
+          vim.log.levels.WARN
+        )
+      end)
     end
   end,
 })
