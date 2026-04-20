@@ -19,6 +19,8 @@ local state = {
   sidebar_width = 38,
   refresh_timer = nil,
   repo_snapshot = nil,
+  preview_buf = nil,
+  preview_signature = nil,
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
@@ -29,6 +31,7 @@ local current_branch
 local configured_remote
 local current_sidebar_item
 local render_sidebar_status
+local render_sidebar_preview
 local repo_entry
 
 local function join(...)
@@ -90,6 +93,10 @@ local function reset_closed_handles()
   end
   if not is_valid_buf(state.sidebar_status_buf) then
     state.sidebar_status_buf = nil
+  end
+  if not is_valid_buf(state.preview_buf) then
+    state.preview_buf = nil
+    state.preview_signature = nil
   end
 end
 
@@ -921,6 +928,7 @@ local function placeholder_buf()
     "Workspace Source Control",
     "",
     "Select a changed file from the left panel to open a unified diff.",
+    "Select any repo item on the left to preview full details here.",
     "Select a repo action to sync, generate a commit message, commit, or push.",
     "",
     "Controls:",
@@ -931,6 +939,247 @@ local function placeholder_buf()
   }
 
   return create_scratch_buffer("git-workspace://home", lines, nil, false)
+end
+
+local function split_text_lines(text)
+  text = trim(text)
+  if text == "" then
+    return {}
+  end
+
+  return vim.split(text, "\n", { plain = true })
+end
+
+local function append_preview_section(lines, title, body_lines)
+  if body_lines == nil or vim.tbl_isempty(body_lines) then
+    return
+  end
+
+  if #lines > 0 and lines[#lines] ~= "" then
+    table.insert(lines, "")
+  end
+
+  table.insert(lines, title)
+  for _, line in ipairs(body_lines) do
+    table.insert(lines, line)
+  end
+end
+
+local function preview_buffer(lines)
+  if is_valid_buf(state.preview_buf) then
+    vim.bo[state.preview_buf].modifiable = true
+    api.nvim_buf_set_lines(state.preview_buf, 0, -1, false, lines)
+    vim.bo[state.preview_buf].modifiable = false
+    vim.bo[state.preview_buf].readonly = true
+    vim.bo[state.preview_buf].filetype = ""
+    return state.preview_buf
+  end
+
+  state.preview_buf = create_scratch_buffer("git-workspace://preview", lines, nil, false)
+  return state.preview_buf
+end
+
+local function repo_preview_lines(repo)
+  local lines = {
+    "Path: " .. repo.path,
+    "Branch: " .. (repo.branch or "(unknown)"),
+    "Summary: " .. (repo.summary or "clean"),
+  }
+
+  if repo.is_submodule then
+    table.insert(lines, "Submodule path: " .. (repo.submodule_path or repo_title(repo)))
+  end
+
+  if repo.initialized == false then
+    append_preview_section(lines, "State", {
+      "This submodule is not initialized.",
+      "Run the Init action to execute git submodule update --init --recursive for it.",
+    })
+    return lines
+  end
+
+  local counts = repo.counts or {}
+  append_preview_section(lines, "Working Tree", {
+    string.format(
+      "staged %d  unstaged %d  untracked %d  conflicts %d",
+      counts.staged or 0,
+      counts.unstaged or 0,
+      counts.untracked or 0,
+      counts.conflicts or 0
+    ),
+  })
+
+  local push = repo.push or {}
+  local remote_lines = {}
+  if push.branch then
+    table.insert(remote_lines, "Local branch: " .. push.branch)
+  end
+  if push.upstream then
+    table.insert(remote_lines, "Upstream: " .. push.upstream)
+  end
+  if push.has_upstream then
+    table.insert(remote_lines, string.format("Ahead %d  Behind %d", push.ahead or 0, push.behind or 0))
+  elseif push.remote then
+    table.insert(remote_lines, "Remote: " .. push.remote)
+  end
+  append_preview_section(lines, "Remote", remote_lines)
+
+  if not vim.tbl_isempty(repo.submodules or {}) then
+    local submodule_lines = {}
+    for _, submodule in ipairs(repo.submodules or {}) do
+      table.insert(submodule_lines, string.format("- %s  %s", repo_title(submodule), submodule.branch or "(unknown)"))
+    end
+    append_preview_section(lines, "Submodules", submodule_lines)
+  end
+
+  append_preview_section(lines, "Usage", {
+    "Press <Tab> to expand or collapse.",
+    "Press <CR> on a file to open its diff.",
+    "Press <CR> on an action to run it.",
+  })
+
+  return lines
+end
+
+local function action_preview(repo, action_name)
+  local title_prefix = ({
+    sync = "Sync",
+    push = "Push",
+    commit = "Commit",
+    generate_message = "Commit Message",
+  })[action_name] or "Action"
+  local title = title_prefix .. " · " .. repo_title(repo)
+  local lines = repo_preview_lines(repo)
+  local action_state = repo_action_state(repo.path)
+  local remote_state = repo_remote_state(repo.path)
+
+  if action_name == "sync" then
+    local body = {}
+    if repo.initialized == false then
+      body = {
+        "This action will initialize the submodule in the parent repository.",
+        "It runs git submodule update --init --recursive for the selected submodule.",
+      }
+    else
+      local push = repo.push or {}
+      body = {
+        push.has_upstream and "This action runs git pull --ff-only." or "This action fetches the configured remote.",
+      }
+      if push.has_upstream then
+        table.insert(body, string.format("Behind %d  Ahead %d", push.behind or 0, push.ahead or 0))
+      end
+    end
+    if remote_state.checking then
+      table.insert(body, "Remote status check is in progress.")
+    end
+    append_preview_section(lines, "Action", body)
+  elseif action_name == "push" then
+    append_preview_section(lines, "Action", {
+      "Push the current branch to its remote.",
+      "If upstream is missing, gw will push with --set-upstream.",
+    })
+  elseif action_name == "commit" then
+    append_preview_section(lines, "Action", {
+      "Commit all current changes in this repository using the generated message below.",
+    })
+  elseif action_name == "generate_message" then
+    append_preview_section(lines, "Action", {
+      "Generate a Conventional Commit message from the current repository changes.",
+    })
+  end
+
+  if action_state.busy then
+    append_preview_section(lines, "Current Status", split_text_lines(action_state.busy))
+  end
+  if action_state.error then
+    append_preview_section(lines, "Last Error", split_text_lines(action_state.error))
+  end
+  if action_state.commit_message then
+    append_preview_section(lines, "Commit Message", split_text_lines(action_state.commit_message))
+  elseif action_name == "commit" or action_name == "generate_message" then
+    append_preview_section(lines, "Commit Message", { "No generated commit message yet." })
+  end
+
+  return title, lines, table.concat({
+    "action",
+    repo.path,
+    action_name,
+    tostring(action_state.busy or ""),
+    tostring(action_state.error or ""),
+    tostring(action_state.commit_message or ""),
+    tostring(remote_state.checking or false),
+    tostring(remote_state.checked or false),
+  }, "\n")
+end
+
+local function status_preview(item)
+  local repo = item.repo
+  local title = (item.status_title or "Status") .. " · " .. repo_title(repo)
+  local lines = repo_preview_lines(repo)
+  append_preview_section(lines, item.status_title or "Status", split_text_lines(item.status_text or ""))
+  return title, lines, table.concat({
+    "status",
+    repo.path,
+    tostring(item.status_title or ""),
+    tostring(item.status_text or ""),
+  }, "\n")
+end
+
+local function file_preview(item)
+  local repo = item.repo
+  local file = item.file
+  local title = "File · " .. vim.fs.basename(file.path)
+  local lines = {
+    "Repository: " .. repo_title(repo),
+    "Path: " .. file.path,
+    "Status: [" .. file.code .. "] " .. diff_status_summary(file),
+    "",
+    "Press <CR> to open the unified diff for this file.",
+  }
+
+  if file.old_path then
+    append_preview_section(lines, "Source", { file.old_path })
+  end
+
+  return title, lines, table.concat({
+    "file",
+    repo.path,
+    file.path,
+    file.code,
+  }, "\n")
+end
+
+local function preview_for_item(item)
+  if not item then
+    return "Workspace Source Control", {
+      "Select any repo, action, or file on the left to preview details here.",
+    }, "home"
+  end
+
+  if item.kind == "repo" then
+    return "Repository · " .. repo_title(item.repo), repo_preview_lines(item.repo), table.concat({
+      "repo",
+      item.repo.path,
+      tostring(item.repo.summary or ""),
+      tostring(item.repo.branch or ""),
+    }, "\n")
+  end
+
+  if item.kind == "action" then
+    return action_preview(item.repo, item.action)
+  end
+
+  if item.kind == "status" then
+    return status_preview(item)
+  end
+
+  if item.kind == "file" then
+    return file_preview(item)
+  end
+
+  return "Workspace Source Control", {
+    "Select any repo, action, or file on the left to preview details here.",
+  }, "home"
 end
 
 local function apply_sidebar_mappings(buf)
@@ -971,7 +1220,10 @@ local function ensure_sidebar_buf()
   api.nvim_create_autocmd({ "BufEnter", "CursorMoved", "WinEnter" }, {
     group = group,
     buffer = buf,
-    callback = render_sidebar_status,
+    callback = function()
+      render_sidebar_status()
+      render_sidebar_preview()
+    end,
   })
 
   return buf
@@ -1070,6 +1322,44 @@ render_sidebar_status = function()
   vim.bo[state.sidebar_status_buf].modifiable = false
 end
 
+render_sidebar_preview = function()
+  if not is_valid_tab(state.tabpage) then
+    return
+  end
+
+  local win = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
+  if not win then
+    return
+  end
+
+  local item = current_sidebar_item()
+  if item and item.kind == "file" and state.current_diff ~= nil then
+    local current = state.current_diff
+    if current.repo_path == item.repo.path and current.file_path == item.file.path and is_valid_buf(current.buf) then
+      return
+    end
+  end
+
+  local title, body_lines, signature = preview_for_item(item)
+  if signature == state.preview_signature and is_valid_buf(state.preview_buf) and api.nvim_win_get_buf(win) == state.preview_buf then
+    return
+  end
+
+  close_extra_main_windows(win)
+  state.main_win = win
+  state.current_diff = nil
+  state.preview_signature = signature
+
+  local lines = { title, "" }
+  vim.list_extend(lines, body_lines or {})
+
+  local buf = preview_buffer(lines)
+  api.nvim_win_set_buf(win, buf)
+  configure_main_window(win)
+  api.nvim_buf_clear_namespace(buf, diff_namespace, 0, -1)
+  api.nvim_buf_add_highlight(buf, diff_namespace, "Title", 0, 0, -1)
+end
+
 local function attach_sidebar_status()
   local buf = ensure_sidebar_status_buf()
 
@@ -1093,12 +1383,6 @@ local function add_sidebar_line(lines, item, text)
   table.insert(lines, text)
   if item then
     state.line_items[#lines] = item
-  end
-end
-
-local function add_wrapped_sidebar_lines(lines, item, text, indent)
-  for _, wrapped in ipairs(wrap_sidebar_text(text, indent or "     ")) do
-    add_sidebar_line(lines, item, wrapped)
   end
 end
 
@@ -1126,7 +1410,6 @@ local function render_repo_actions(lines, repo, depth)
   local action_state = repo_action_state(repo.path)
   local remote_state = repo_remote_state(repo.path)
   local indent = repo_content_indent(depth)
-  local message_indent = indent .. "  "
   local has_changes = repo.initialized ~= false and not vim.tbl_isempty(repo.files)
   local message = action_state.commit_message
   local show_push = repo.initialized ~= false and repo.push and repo.push.push_available
@@ -1146,6 +1429,8 @@ local function render_repo_actions(lines, repo, depth)
       repo = repo,
       focus_target = action_state.busy_focus or "busy",
       highlight = "Comment",
+      status_title = "Current Status",
+      status_text = action_state.busy,
     }, indent .. "… " .. shorten(action_state.busy, 28))
   end
 
@@ -1154,6 +1439,8 @@ local function render_repo_actions(lines, repo, depth)
       kind = "status",
       repo = repo,
       highlight = "DiagnosticError",
+      status_title = "Last Error",
+      status_text = action_state.error,
     }, indent .. "! " .. shorten(action_state.error, 28))
   end
 
@@ -1170,6 +1457,8 @@ local function render_repo_actions(lines, repo, depth)
       kind = "status",
       repo = repo,
       highlight = "Comment",
+      status_title = "State",
+      status_text = repo.summary,
     }, indent .. shorten(repo.summary, 28))
     return
   end
@@ -1194,6 +1483,17 @@ local function render_repo_actions(lines, repo, depth)
     }, indent .. "[ Commit staged changes ]")
   end
 
+  if message then
+    add_sidebar_line(lines, {
+      kind = "status",
+      repo = repo,
+      focus_target = "message",
+      highlight = "String",
+      status_title = "Commit Message",
+      status_text = message,
+    }, indent .. "• Commit message ready")
+  end
+
   if has_changes and action_state.busy_focus ~= "busy_generate_message" then
     add_sidebar_line(lines, {
       kind = "action",
@@ -1202,14 +1502,6 @@ local function render_repo_actions(lines, repo, depth)
       focus_target = "generate_message",
       highlight = "Function",
     }, indent .. "[ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
-  end
-
-  if message then
-    add_wrapped_sidebar_lines(lines, {
-      kind = "message",
-      repo = repo,
-      highlight = "String",
-    }, message, message_indent)
   end
 end
 
@@ -1328,6 +1620,7 @@ function M.render(repos)
   end
 
   render_sidebar_status()
+  render_sidebar_preview()
 end
 
 local function restore_placeholder_view()
@@ -1343,6 +1636,7 @@ local function restore_placeholder_view()
   close_extra_main_windows(win)
   state.main_win = win
   state.current_diff = nil
+  state.preview_signature = "home"
   api.nvim_win_set_buf(win, placeholder_buf())
   configure_main_window(win)
 end
@@ -1360,6 +1654,7 @@ local function show_action_output(title, body_lines, filetype)
   close_extra_main_windows(win)
   state.main_win = win
   state.current_diff = nil
+  state.preview_signature = nil
 
   local lines = { title, "" }
   vim.list_extend(lines, body_lines or {})
@@ -1449,7 +1744,7 @@ local function run_repo_action(repo, action_name)
         error = false,
         info = false,
       })
-      set_sidebar_focus(repo.path, "commit")
+      set_sidebar_focus(repo.path, "message")
       schedule_sidebar_refresh()
     end)
     return
@@ -2165,6 +2460,7 @@ local function open_diff(repo, file)
     repo_path = repo.path,
     win = win,
   }
+  state.preview_signature = nil
   api.nvim_set_current_win(win)
   if diff_view.hunks and diff_view.hunks[1] then
     api.nvim_win_set_cursor(win, { diff_view.hunks[1], 0 })
@@ -2260,6 +2556,8 @@ function M.close()
   state.main_win = nil
   state.current_diff = nil
   state.repo_snapshot = nil
+  state.preview_buf = nil
+  state.preview_signature = nil
   stop_refresh_timer()
 
   if api.nvim_get_current_tabpage() == tabpage then
