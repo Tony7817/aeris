@@ -121,7 +121,7 @@ local function configure_list_window(win, buf)
   vim.wo[win].wrap = false
   vim.wo[win].spell = false
   vim.wo[win].winfixheight = true
-  vim.wo[win].winfixwidth = true
+  vim.wo[win].winfixwidth = false
   set_winbar(win, "References")
 end
 
@@ -134,7 +134,21 @@ local function configure_preview_window(win, buf)
   vim.wo[win].wrap = false
   vim.wo[win].spell = false
   vim.wo[win].winfixheight = true
+  vim.wo[win].winfixwidth = false
   set_winbar(win, "Preview")
+end
+
+local function balance_panel_widths()
+  if not is_valid_win(state.list_win) or not is_valid_win(state.preview_win) then
+    return
+  end
+
+  local total_width = api.nvim_win_get_width(state.list_win) + api.nvim_win_get_width(state.preview_win)
+  if total_width < 2 then
+    return
+  end
+
+  api.nvim_win_set_width(state.list_win, math.floor(total_width / 2))
 end
 
 local function list_label(item)
@@ -293,6 +307,7 @@ local function ensure_layout()
 
   if state.tabpage == current_tab and is_valid_win(state.list_win) and is_valid_win(state.preview_win) then
     state.origin_win = current_win
+    balance_panel_widths()
     return
   end
 
@@ -316,9 +331,9 @@ local function ensure_layout()
   state.list_win = panel_left
   state.preview_win = panel_right
 
-  api.nvim_win_set_width(state.list_win, 44)
   configure_list_window(state.list_win, state.list_buf)
   configure_preview_window(state.preview_win, state.preview_buf)
+  balance_panel_widths()
 
   bind_list_buffer(state.list_buf)
   bind_preview_buffer(state.preview_buf)
