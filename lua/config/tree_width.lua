@@ -1,6 +1,6 @@
 local M = {}
 
-local DEFAULT_WIDTH = 22
+local DEFAULT_WIDTH = 30
 local MIN_WIDTH = 18
 local STEP = 4
 local REPEAT_TIMEOUT_MS = 1200
