@@ -1323,12 +1323,54 @@ local function diff_status_summary(file)
   return #labels > 0 and table.concat(labels, " • ") or "changed"
 end
 
-local function build_diff_view(file, raw_lines)
+local function read_file_lines(path)
+  if not path or vim.fn.filereadable(path) ~= 1 then
+    return {}
+  end
+
+  local ok, lines = pcall(vim.fn.readfile, path)
+  if not ok then
+    return nil, lines
+  end
+
+  return lines
+end
+
+local function parse_diff_blocks(raw_lines)
+  local blocks = {}
+  local current
+
+  for _, line in ipairs(raw_lines) do
+    local old_start, old_count, new_start, new_count = line:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
+    if old_start then
+      current = {
+        old_start = tonumber(old_start) or 0,
+        old_count = old_count == "" and 1 or tonumber(old_count) or 0,
+        new_start = tonumber(new_start) or 0,
+        new_count = new_count == "" and 1 or tonumber(new_count) or 0,
+        ops = {},
+      }
+      table.insert(blocks, current)
+    elseif current ~= nil then
+      local prefix = line:sub(1, 1)
+      if prefix == "+" or prefix == "-" or prefix == " " then
+        table.insert(current.ops, {
+          kind = prefix,
+          text = line:sub(2),
+        })
+      end
+    end
+  end
+
+  return blocks
+end
+
+local function build_diff_view(repo, file, raw_lines)
   local lines = {}
   local highlights = {}
   local hunks = {}
   local scrollbar_marks = {}
-  local pending_hunk = false
+  local diff_blocks = parse_diff_blocks(raw_lines)
 
   local function add_line(text, group, scrollbar_type)
     table.insert(lines, text)
@@ -1351,51 +1393,89 @@ local function build_diff_view(file, raw_lines)
   end
 
   for _, line in ipairs(raw_lines) do
-    if
-      line:match("^diff %-%-git ")
-      or line:match("^index ")
-      or line:match("^--- ")
-      or line:match("^%+%+%+ ")
-      or line:match("^old mode ")
-      or line:match("^new mode ")
-      or line:match("^new file mode ")
-      or line:match("^deleted file mode ")
-      or line:match("^similarity index ")
-      or line:match("^rename from ")
-      or line:match("^rename to ")
-    then
-      -- Drop raw git metadata. The view should focus on the code changes.
-    elseif line:match("^Binary files ") then
+    if line:match("^Binary files ") then
       add_line("Binary file changed", "Comment")
-    elseif line:match("^@@") then
-      pending_hunk = true
-    elseif line:sub(1, 1) == "+" then
-      local line_number = add_line(line:sub(2), "DiffAdd", "GitAdd")
-      if pending_hunk then
-        table.insert(hunks, line_number)
-        pending_hunk = false
-      end
-    elseif line:sub(1, 1) == "-" then
-      local line_number = add_line(line:sub(2), "DiffDelete", "GitDelete")
-      if pending_hunk then
-        table.insert(hunks, line_number)
-        pending_hunk = false
-      end
-    elseif line:sub(1, 1) == " " then
-      local line_number = add_line(line:sub(2), nil)
-      if pending_hunk then
-        table.insert(hunks, line_number)
-        pending_hunk = false
-      end
-    elseif line == "\\ No newline at end of file" then
-      add_line("  [No newline at end of file]", "Comment")
-    elseif line ~= "" then
-      local line_number = add_line(line, "Comment")
-      if pending_hunk then
-        table.insert(hunks, line_number)
-        pending_hunk = false
+      return {
+        lines = lines,
+        highlights = highlights,
+        hunks = hunks,
+        scrollbar_marks = scrollbar_marks,
+      }
+    end
+  end
+
+  local current_lines = {}
+  if not file.deleted then
+    local path = join(repo.path, file.path)
+    local read_result, read_err = read_file_lines(path)
+    if read_result == nil then
+      add_line("Unable to read file contents.", "Comment")
+      add_line(tostring(read_err), "DiagnosticError")
+      return {
+        lines = lines,
+        highlights = highlights,
+        hunks = hunks,
+        scrollbar_marks = scrollbar_marks,
+      }
+    end
+    current_lines = read_result
+  end
+
+  if #diff_blocks == 0 then
+    if file.deleted then
+      add_line("No textual diff available.", "Comment")
+    else
+      for _, line in ipairs(current_lines) do
+        add_line(line)
       end
     end
+    return {
+      lines = lines,
+      highlights = highlights,
+      hunks = hunks,
+      scrollbar_marks = scrollbar_marks,
+    }
+  end
+
+  local current_index = 1
+
+  for _, block in ipairs(diff_blocks) do
+    local block_start = math.max(block.new_start, 1)
+
+    while not file.deleted and current_index < block_start and current_index <= #current_lines do
+      add_line(current_lines[current_index])
+      current_index = current_index + 1
+    end
+
+    local hunk_anchor
+    for _, op in ipairs(block.ops) do
+      if op.kind == "-" then
+        local line_number = add_line(op.text, "DiffDelete", "GitDelete")
+        hunk_anchor = hunk_anchor or line_number
+      elseif op.kind == "+" then
+        local text = file.deleted and op.text or (current_lines[current_index] or op.text)
+        local line_number = add_line(text, "DiffAdd", "GitAdd")
+        hunk_anchor = hunk_anchor or line_number
+        if not file.deleted then
+          current_index = current_index + 1
+        end
+      elseif op.kind == " " then
+        local text = file.deleted and op.text or (current_lines[current_index] or op.text)
+        add_line(text)
+        if not file.deleted then
+          current_index = current_index + 1
+        end
+      end
+    end
+
+    if hunk_anchor then
+      table.insert(hunks, hunk_anchor)
+    end
+  end
+
+  while not file.deleted and current_index <= #current_lines do
+    add_line(current_lines[current_index])
+    current_index = current_index + 1
   end
 
   if #lines == 0 then
@@ -1443,6 +1523,7 @@ local function unified_diff_output(repo, file)
     return run_git_capture({
       "git",
       "diff",
+      "--unified=0",
       "--no-index",
       "--no-color",
       "--no-ext-diff",
@@ -1455,6 +1536,7 @@ local function unified_diff_output(repo, file)
   local args = {
     "git",
     "diff",
+    "--unified=0",
     "--no-color",
     "--no-ext-diff",
     "--find-renames",
@@ -1552,7 +1634,7 @@ local function open_diff(repo, file)
   local output, err = unified_diff_output(repo, file)
   local diff_view
   if output and output ~= "" then
-    diff_view = build_diff_view(file, diff_lines(output))
+    diff_view = build_diff_view(repo, file, diff_lines(output))
   elseif err and err ~= "" then
     diff_view = {
       lines = {
@@ -1608,6 +1690,14 @@ local function open_diff(repo, file)
     win = win,
   }
   api.nvim_set_current_win(win)
+  if diff_view.hunks and diff_view.hunks[1] then
+    api.nvim_win_set_cursor(win, { diff_view.hunks[1], 0 })
+    window_call(win, function()
+      vim.cmd("normal! zz")
+    end)
+  else
+    api.nvim_win_set_cursor(win, { 1, 0 })
+  end
 end
 
 function M.toggle_selected()
