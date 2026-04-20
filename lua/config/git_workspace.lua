@@ -7,11 +7,12 @@ local state = {
   tabpage = nil,
   sidebar_buf = nil,
   sidebar_win = nil,
+  sidebar_status_buf = nil,
+  sidebar_status_win = nil,
   main_win = nil,
   current_diff = nil,
   line_items = {},
   repo_expanded = {},
-  dir_expanded = {},
   repo_actions = {},
   repo_remote = {},
   sidebar_focus = nil,
@@ -26,6 +27,8 @@ local close_extra_main_windows
 local configure_main_window
 local current_branch
 local configured_remote
+local current_sidebar_item
+local render_sidebar_status
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -59,6 +62,7 @@ local function reset_closed_handles()
   if not is_valid_tab(state.tabpage) then
     state.tabpage = nil
     state.sidebar_win = nil
+    state.sidebar_status_win = nil
     state.main_win = nil
     state.current_diff = nil
     state.repo_snapshot = nil
@@ -67,6 +71,9 @@ local function reset_closed_handles()
 
   if not is_valid_win(state.sidebar_win) then
     state.sidebar_win = nil
+  end
+  if not is_valid_win(state.sidebar_status_win) then
+    state.sidebar_status_win = nil
   end
   if not in_git_tab(state.main_win) then
     state.main_win = nil
@@ -79,6 +86,9 @@ local function reset_closed_handles()
   end
   if not is_valid_buf(state.sidebar_buf) then
     state.sidebar_buf = nil
+  end
+  if not is_valid_buf(state.sidebar_status_buf) then
+    state.sidebar_status_buf = nil
   end
 end
 
@@ -94,7 +104,7 @@ local function main_wins()
   local wins = {}
 
   for _, win in ipairs(tab_wins()) do
-    if win ~= state.sidebar_win then
+    if win ~= state.sidebar_win and win ~= state.sidebar_status_win then
       table.insert(wins, win)
     end
   end
@@ -390,71 +400,6 @@ local function parse_file_status(line)
   }
 end
 
-local function compare_nodes(a, b)
-  if a.kind ~= b.kind then
-    return a.kind == "dir"
-  end
-
-  return a.name < b.name
-end
-
-local function sort_tree(nodes)
-  table.sort(nodes, compare_nodes)
-
-  for _, node in ipairs(nodes) do
-    if node.kind == "dir" then
-      sort_tree(node.children)
-    end
-  end
-end
-
-local function build_tree(files)
-  local root = {}
-
-  for _, file in ipairs(files) do
-    local parts = vim.split(file.path, "/", { plain = true })
-    local children = root
-    local current_path = {}
-
-    for index, part in ipairs(parts) do
-      table.insert(current_path, part)
-      local path = table.concat(current_path, "/")
-
-      if index == #parts then
-        table.insert(children, {
-          kind = "file",
-          name = part,
-          path = path,
-          file = file,
-        })
-      else
-        local dir
-        for _, node in ipairs(children) do
-          if node.kind == "dir" and node.name == part then
-            dir = node
-            break
-          end
-        end
-
-        if not dir then
-          dir = {
-            kind = "dir",
-            name = part,
-            path = path,
-            children = {},
-          }
-          table.insert(children, dir)
-        end
-
-        children = dir.children
-      end
-    end
-  end
-
-  sort_tree(root)
-  return root
-end
-
 local function repo_entry(path)
   local name = vim.fs.basename(path)
   local output, err = run_git({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all" }, path)
@@ -467,7 +412,6 @@ local function repo_entry(path)
       summary = err ~= "" and err or "git status failed",
       status_lines = {},
       files = {},
-      tree = {},
     }
   end
 
@@ -496,7 +440,6 @@ local function repo_entry(path)
     counts = counts,
     status_lines = lines,
     files = files,
-    tree = build_tree(files),
     push = push,
   }
 end
@@ -750,14 +693,7 @@ local function normalize_commit_message(text)
 end
 
 local function selected_item()
-  reset_closed_handles()
-
-  if not is_valid_win(state.sidebar_win) then
-    return nil
-  end
-
-  local line = api.nvim_win_get_cursor(state.sidebar_win)[1]
-  return state.line_items[line]
+  return current_sidebar_item()
 end
 
 local function focus_sidebar()
@@ -842,8 +778,8 @@ local function apply_sidebar_mappings(buf)
 
   map("<CR>", M.open_selected, "Open selected Git item")
   map("o", M.open_selected, "Open selected Git item")
-  map("<Tab>", M.toggle_selected, "Toggle selected Git tree item")
-  map("za", M.toggle_selected, "Toggle selected Git tree item")
+  map("<Tab>", M.toggle_selected, "Toggle selected Git repo")
+  map("za", M.toggle_selected, "Toggle selected Git repo")
   map("r", function()
     M.refresh({ check_remote = true, force_remote_check = true })
   end, "Refresh Git panel")
@@ -865,6 +801,29 @@ local function ensure_sidebar_buf()
   vim.bo[buf].swapfile = false
 
   apply_sidebar_mappings(buf)
+  api.nvim_create_autocmd({ "BufEnter", "CursorMoved", "WinEnter" }, {
+    group = group,
+    buffer = buf,
+    callback = render_sidebar_status,
+  })
+
+  return buf
+end
+
+local function ensure_sidebar_status_buf()
+  if is_valid_buf(state.sidebar_status_buf) then
+    return state.sidebar_status_buf
+  end
+
+  local buf = api.nvim_create_buf(false, true)
+  state.sidebar_status_buf = buf
+
+  vim.bo[buf].bufhidden = "hide"
+  vim.bo[buf].buflisted = false
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].filetype = "erwin-git-workspace-status"
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].modifiable = false
 
   return buf
 end
@@ -880,6 +839,20 @@ local function configure_sidebar_window(win)
   vim.wo[win].winblend = 0
   vim.wo[win].winhighlight =
     "Normal:Normal,NormalNC:Normal,EndOfBuffer:Normal,WinSeparator:WinSeparator,CursorLine:Visual"
+end
+
+local function configure_sidebar_status_window(win)
+  vim.wo[win].cursorline = false
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].spell = false
+  vim.wo[win].winfixheight = true
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].statusline = ""
+  vim.wo[win].winhighlight =
+    "Normal:StatusLine,NormalNC:StatusLineNC,EndOfBuffer:StatusLine,WinSeparator:WinSeparator"
 end
 
 local function attach_sidebar()
@@ -900,41 +873,53 @@ local function attach_sidebar()
   configure_sidebar_window(state.sidebar_win)
 end
 
-local function render_tree_node(lines, repo, node, depth)
-  local indent = string.rep("  ", depth)
+current_sidebar_item = function()
+  reset_closed_handles()
 
-  if node.kind == "dir" then
-    local key = repo.path .. "::" .. node.path
-    local expanded = state.dir_expanded[key]
-    if expanded == nil then
-      expanded = true
-      state.dir_expanded[key] = true
-    end
+  if not is_valid_win(state.sidebar_win) then
+    return nil
+  end
 
-    table.insert(lines, string.format(" %s%s %s/", indent, expanded and "▾" or "▸", node.name))
-    state.line_items[#lines] = {
-      kind = "dir",
-      repo = repo,
-      node = node,
-    }
+  local line = api.nvim_win_get_cursor(state.sidebar_win)[1]
+  return state.line_items[line]
+end
 
-    if expanded then
-      for _, child in ipairs(node.children) do
-        render_tree_node(lines, repo, child, depth + 1)
-      end
-    end
+local function sidebar_status_lines()
+  local item = current_sidebar_item()
+  if item and item.kind == "file" and item.file and item.file.path then
+    return { " Path: " .. item.file.path }
+  end
 
+  return { " Path: " }
+end
+
+render_sidebar_status = function()
+  if not is_valid_buf(state.sidebar_status_buf) then
     return
   end
 
-  local file = node.file
-  table.insert(lines, string.format(" %s  [%s] %s", indent, file.code, node.name))
-  state.line_items[#lines] = {
-    kind = "file",
-    repo = repo,
-    node = node,
-    file = file,
-  }
+  vim.bo[state.sidebar_status_buf].modifiable = true
+  api.nvim_buf_set_lines(state.sidebar_status_buf, 0, -1, false, sidebar_status_lines())
+  vim.bo[state.sidebar_status_buf].modifiable = false
+end
+
+local function attach_sidebar_status()
+  local buf = ensure_sidebar_status_buf()
+
+  if is_valid_win(state.sidebar_status_win) then
+    api.nvim_win_set_buf(state.sidebar_status_win, buf)
+    render_sidebar_status()
+    return
+  end
+
+  state.sidebar_status_win = api.nvim_open_win(buf, false, {
+    split = "below",
+    win = state.sidebar_win,
+    height = 2,
+  })
+
+  configure_sidebar_status_window(state.sidebar_status_win)
+  render_sidebar_status()
 end
 
 local function add_sidebar_line(lines, item, text)
@@ -947,6 +932,17 @@ end
 local function add_wrapped_sidebar_lines(lines, item, text)
   for _, wrapped in ipairs(wrap_sidebar_text(text, "     ")) do
     add_sidebar_line(lines, item, wrapped)
+  end
+end
+
+local function render_repo_files(lines, repo)
+  for _, file in ipairs(repo.files or {}) do
+    add_sidebar_line(lines, {
+      kind = "file",
+      repo = repo,
+      file = file,
+      focus_target = "file:" .. file.path,
+    }, string.format("   [%s] %s", file.code, vim.fs.basename(file.path)))
   end
 end
 
@@ -1066,22 +1062,20 @@ function M.render(repos)
     if expanded then
       render_repo_actions(lines, repo)
 
-      if vim.tbl_isempty(repo.tree) then
+      if vim.tbl_isempty(repo.files) then
         add_sidebar_line(lines, {
           kind = "status",
           highlight = "Comment",
         }, "   No changes")
       else
-        for _, node in ipairs(repo.tree) do
-          render_tree_node(lines, repo, node, 1)
-        end
+        render_repo_files(lines, repo)
       end
     end
 
     table.insert(lines, "")
   end
 
-  table.insert(lines, "  <CR> open/run   <Tab> toggle")
+  table.insert(lines, "  <CR> open/run   <Tab> toggle repo")
   table.insert(lines, "  r refresh")
   table.insert(lines, "  q close")
 
@@ -1094,8 +1088,6 @@ function M.render(repos)
 
   for line, item in pairs(state.line_items) do
     if item.kind == "repo" then
-      api.nvim_buf_add_highlight(state.sidebar_buf, -1, "Directory", line - 1, 0, -1)
-    elseif item.kind == "dir" then
       api.nvim_buf_add_highlight(state.sidebar_buf, -1, "Directory", line - 1, 0, -1)
     elseif item.kind == "file" then
       local hl = "Normal"
@@ -1132,6 +1124,8 @@ function M.render(repos)
       end
     end
   end
+
+  render_sidebar_status()
 end
 
 local function restore_placeholder_view()
@@ -1991,13 +1985,6 @@ function M.toggle_selected()
     focus_sidebar()
     return
   end
-
-  if item.kind == "dir" then
-    local key = item.repo.path .. "::" .. item.node.path
-    state.dir_expanded[key] = not state.dir_expanded[key]
-    M.render()
-    focus_sidebar()
-  end
 end
 
 function M.open_selected()
@@ -2006,7 +1993,7 @@ function M.open_selected()
     return
   end
 
-  if item.kind == "repo" or item.kind == "dir" then
+  if item.kind == "repo" then
     M.toggle_selected()
     return
   end
@@ -2066,6 +2053,7 @@ function M.close()
   local tabpage = state.tabpage
   state.tabpage = nil
   state.sidebar_win = nil
+  state.sidebar_status_win = nil
   state.main_win = nil
   state.current_diff = nil
   state.repo_snapshot = nil
@@ -2085,7 +2073,7 @@ local function ensure_layout()
 
   if is_valid_tab(state.tabpage) then
     api.nvim_set_current_tabpage(state.tabpage)
-    if is_valid_win(state.sidebar_win) then
+    if is_valid_win(state.sidebar_win) and is_valid_win(state.sidebar_status_win) then
       focus_sidebar()
       M.render()
       return
@@ -2103,6 +2091,7 @@ local function ensure_layout()
   configure_main_window(state.main_win)
 
   attach_sidebar()
+  attach_sidebar_status()
   M.render()
   focus_sidebar()
 end
