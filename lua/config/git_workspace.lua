@@ -21,6 +21,8 @@ local state = {
   repo_snapshot = nil,
   preview_buf = nil,
   preview_signature = nil,
+  remote_check_queue = {},
+  remote_check_active = false,
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
@@ -33,6 +35,7 @@ local current_sidebar_item
 local render_sidebar_status
 local render_sidebar_preview
 local repo_entry
+local diff_status_summary
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -58,6 +61,11 @@ local function stop_refresh_timer()
   end
 end
 
+local function reset_remote_check_queue()
+  state.remote_check_queue = {}
+  state.remote_check_active = false
+end
+
 local function in_git_tab(win)
   return is_valid_tab(state.tabpage) and is_valid_win(win) and api.nvim_win_get_tabpage(win) == state.tabpage
 end
@@ -71,6 +79,7 @@ local function reset_closed_handles()
     state.current_diff = nil
     state.repo_snapshot = nil
     stop_refresh_timer()
+    reset_remote_check_queue()
   end
 
   if not is_valid_win(state.sidebar_win) then
@@ -143,6 +152,27 @@ local function parse_branch(first_line)
   branch = branch:match("^(.-)%.%.%.") or branch
   branch = branch:match("^(.-)%s+%[") or branch
   return vim.trim(branch)
+end
+
+local function initial_push_state(branch)
+  branch = vim.trim(branch or "")
+  if branch == "" or branch == "(unknown)" or branch == "(unavailable)" or branch == "(uninitialized)" then
+    return {
+      branch = nil,
+      push_available = false,
+      has_upstream = false,
+      ahead = 0,
+      behind = 0,
+    }
+  end
+
+  return {
+    branch = branch,
+    push_available = true,
+    has_upstream = false,
+    ahead = 0,
+    behind = 0,
+  }
 end
 
 local function branch_push_state(repo_path)
@@ -321,6 +351,30 @@ local function repo_remote_state(repo_path)
   end
 
   return state.repo_remote[repo_path]
+end
+
+local function effective_push_state(repo)
+  local remote_state = repo_remote_state(repo.path)
+  if type(remote_state.push) == "table" then
+    return remote_state.push
+  end
+
+  return repo.push or {}
+end
+
+local function preview_signature_bits(repo)
+  local remote_state = repo_remote_state(repo.path)
+  local push = effective_push_state(repo)
+  return table.concat({
+    tostring(remote_state.checking or false),
+    tostring(remote_state.checked or false),
+    tostring(remote_state.error or ""),
+    tostring(push.branch or ""),
+    tostring(push.push_available or false),
+    tostring(push.has_upstream or false),
+    tostring(push.ahead or 0),
+    tostring(push.behind or 0),
+  }, "\n")
 end
 
 local function set_repo_action_state(repo_path, values)
@@ -552,7 +606,7 @@ repo_entry = function(path, opts, seen)
   local branch = lines[1] and parse_branch(lines[1]) or "(unknown)"
   local counts = parse_counts(lines)
   local files = {}
-  local push = branch_push_state(path)
+  local push = initial_push_state(branch)
 
   for _, line in ipairs(lines) do
     local entry = parse_file_status(line)
@@ -776,12 +830,13 @@ local function queue_remote_check(repo, opts)
       checking = false,
       checked = false,
       error = false,
+      queued = false,
     })
     return
   end
 
   local remote_state = repo_remote_state(repo.path)
-  if remote_state.checking then
+  if remote_state.checking or remote_state.queued then
     return
   end
 
@@ -789,22 +844,49 @@ local function queue_remote_check(repo, opts)
     return
   end
 
-  local args, err = remote_check_command(repo)
-  if not args then
-    if not err then
-      return
-    end
-    set_repo_remote_state(repo.path, {
-      checking = false,
-      checked = false,
-      error = err,
-    })
-    schedule_sidebar_refresh()
+  set_repo_remote_state(repo.path, {
+    checking = false,
+    checked = false,
+    error = false,
+    queued = true,
+  })
+  schedule_sidebar_refresh()
+  state.remote_check_queue[#state.remote_check_queue + 1] = {
+    repo = repo,
+  }
+end
+
+local function start_next_remote_check()
+  if state.remote_check_active then
     return
   end
 
+  local next_job = table.remove(state.remote_check_queue, 1)
+  if not next_job then
+    return
+  end
+
+  local repo = next_job.repo
+  local args, err = remote_check_command(repo)
+  if not args then
+    state.remote_check_active = false
+    if err then
+      set_repo_remote_state(repo.path, {
+        checking = false,
+        queued = false,
+        checked = false,
+        error = err,
+      })
+      schedule_sidebar_refresh()
+    end
+    start_next_remote_check()
+    return
+  end
+
+  state.remote_check_active = true
   set_repo_remote_state(repo.path, {
     checking = true,
+    queued = false,
     checked = false,
     error = false,
   })
@@ -814,22 +896,29 @@ local function queue_remote_check(repo, opts)
     cwd = repo.path,
     text = true,
   }, function(result)
+    state.remote_check_active = false
+
     if result.code ~= 0 then
       set_repo_remote_state(repo.path, {
         checking = false,
+        queued = false,
         checked = false,
         error = trim(result.stderr or result.stdout or "git fetch failed"),
       })
       schedule_sidebar_refresh()
+      start_next_remote_check()
       return
     end
 
     set_repo_remote_state(repo.path, {
       checking = false,
+      queued = false,
       checked = true,
       error = false,
+      push = branch_push_state(repo.path),
     })
     schedule_sidebar_refresh()
+    start_next_remote_check()
   end)
 end
 
@@ -837,6 +926,7 @@ local function queue_remote_checks(repos, opts)
   each_repo(repos, function(repo)
     queue_remote_check(repo, opts)
   end)
+  vim.schedule(start_next_remote_check)
 end
 
 local function normalize_commit_message(text)
@@ -980,6 +1070,7 @@ local function preview_buffer(lines)
 end
 
 local function repo_preview_lines(repo)
+  local push = effective_push_state(repo)
   local lines = {
     "Path: " .. repo.path,
     "Branch: " .. (repo.branch or "(unknown)"),
@@ -1009,7 +1100,6 @@ local function repo_preview_lines(repo)
     ),
   })
 
-  local push = repo.push or {}
   local remote_lines = {}
   if push.branch then
     table.insert(remote_lines, "Local branch: " .. push.branch)
@@ -1052,6 +1142,7 @@ local function action_preview(repo, action_name)
   local lines = repo_preview_lines(repo)
   local action_state = repo_action_state(repo.path)
   local remote_state = repo_remote_state(repo.path)
+  local push = effective_push_state(repo)
 
   if action_name == "sync" then
     local body = {}
@@ -1061,7 +1152,6 @@ local function action_preview(repo, action_name)
         "It runs git submodule update --init --recursive for the selected submodule.",
       }
     else
-      local push = repo.push or {}
       body = {
         push.has_upstream and "This action runs git pull --ff-only." or "This action fetches the configured remote.",
       }
@@ -1104,11 +1194,10 @@ local function action_preview(repo, action_name)
     "action",
     repo.path,
     action_name,
+    preview_signature_bits(repo),
     tostring(action_state.busy or ""),
     tostring(action_state.error or ""),
     tostring(action_state.commit_message or ""),
-    tostring(remote_state.checking or false),
-    tostring(remote_state.checked or false),
   }, "\n")
 end
 
@@ -1130,6 +1219,7 @@ local function status_preview(item)
   return title, lines, table.concat({
     "status",
     repo.path,
+    preview_signature_bits(repo),
     tostring(item.status_title or ""),
     tostring(item.status_text or ""),
   }, "\n")
@@ -1170,6 +1260,7 @@ local function preview_for_item(item)
     return "Repository · " .. repo_title(item.repo), repo_preview_lines(item.repo), table.concat({
       "repo",
       item.repo.path,
+      preview_signature_bits(item.repo),
       tostring(item.repo.summary or ""),
       tostring(item.repo.branch or ""),
     }, "\n")
@@ -1419,15 +1510,18 @@ end
 local function render_repo_actions(lines, repo, depth)
   local action_state = repo_action_state(repo.path)
   local remote_state = repo_remote_state(repo.path)
+  local push = effective_push_state(repo)
   local indent = repo_content_indent(depth)
   local has_changes = repo.initialized ~= false and not vim.tbl_isempty(repo.files)
   local message = action_state.commit_message
-  local show_push = repo.initialized ~= false and repo.push and repo.push.push_available
-  local push_branch = repo.push and repo.push.branch or trim(repo.branch)
-  local behind = repo.initialized ~= false and repo.push and repo.push.behind or 0
+  local show_push = repo.initialized ~= false and push.push_available
+  local push_branch = push.branch or trim(repo.branch)
+  local behind = repo.initialized ~= false and (push.behind or 0) or 0
   local sync_suffix = ""
 
-  if remote_state.checking then
+  if remote_state.queued then
+    sync_suffix = "  …"
+  elseif remote_state.checking then
     sync_suffix = "  …"
   elseif remote_state.checked and behind > 0 then
     sync_suffix = "  ↓" .. behind
@@ -1998,7 +2092,7 @@ local function diff_lines(output)
   return lines
 end
 
-local function diff_status_summary(file)
+diff_status_summary = function(file)
   local labels = {}
 
   if file.renamed then
@@ -2529,9 +2623,15 @@ function M.refresh(opts)
   M.render(repos)
 
   if opts and opts.check_remote then
-    queue_remote_checks(repos, {
-      force = opts.force_remote_check,
-    })
+    vim.schedule(function()
+      if not is_valid_tab(state.tabpage) then
+        return
+      end
+
+      queue_remote_checks(repos, {
+        force = opts.force_remote_check,
+      })
+    end)
   end
 end
 
@@ -2572,6 +2672,7 @@ function M.close()
   state.preview_buf = nil
   state.preview_signature = nil
   stop_refresh_timer()
+  reset_remote_check_queue()
 
   if api.nvim_get_current_tabpage() == tabpage then
     vim.cmd("tabclose")
