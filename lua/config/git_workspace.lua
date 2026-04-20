@@ -13,6 +13,7 @@ local state = {
   repo_expanded = {},
   dir_expanded = {},
   repo_actions = {},
+  repo_remote = {},
   sidebar_focus = nil,
   sidebar_width = 38,
   refresh_timer = nil,
@@ -119,7 +120,11 @@ local function run_git(args, cwd)
 end
 
 local function parse_branch(first_line)
-  return first_line:match("^##%s+(.*)$") or "(unknown)"
+  local branch = first_line:match("^##%s+(.*)$") or "(unknown)"
+  branch = branch:match("^No commits yet on (.+)$") or branch
+  branch = branch:match("^(.-)%.%.%.") or branch
+  branch = branch:match("^(.-)%s+%[") or branch
+  return vim.trim(branch)
 end
 
 local function branch_push_state(repo_path)
@@ -236,6 +241,7 @@ local function repo_status_snapshot(repos)
       tostring(push.push_available or false),
       tostring(push.has_upstream or false),
       tostring(push.ahead or 0),
+      tostring(push.behind or 0),
       table.concat(repo.status_lines or {}, "\n"),
     }, "\n")
   end
@@ -270,12 +276,28 @@ local function repo_action_state(repo_path)
   return state.repo_actions[repo_path]
 end
 
+local function repo_remote_state(repo_path)
+  if state.repo_remote[repo_path] == nil then
+    state.repo_remote[repo_path] = {}
+  end
+
+  return state.repo_remote[repo_path]
+end
+
 local function set_repo_action_state(repo_path, values)
   local repo_state = repo_action_state(repo_path)
   for key, value in pairs(values) do
     repo_state[key] = value
   end
   return repo_state
+end
+
+local function set_repo_remote_state(repo_path, values)
+  local remote_state = repo_remote_state(repo_path)
+  for key, value in pairs(values) do
+    remote_state[key] = value
+  end
+  return remote_state
 end
 
 local function reset_repo_action_state(repo_path)
@@ -583,14 +605,37 @@ configured_remote = function(repo_path, branch)
   return names[1]
 end
 
+local function upstream_ref(repo_path)
+  local upstream = run_git({ "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" }, repo_path)
+  upstream = trim(upstream)
+  if upstream == "" then
+    return nil
+  end
+
+  return upstream
+end
+
+local function remote_check_command(repo_path)
+  local branch, err = current_branch(repo_path)
+  if not branch then
+    return nil, err
+  end
+
+  local remote = configured_remote(repo_path, branch)
+  if not remote then
+    return nil, "No git remote configured for this repository"
+  end
+
+  return { "git", "fetch", "--quiet", "--prune", remote }, nil
+end
+
 local function push_command(repo_path)
   local branch, err = current_branch(repo_path)
   if not branch then
     return nil, nil, err
   end
 
-  local upstream = run_git({ "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" }, repo_path)
-  if upstream and trim(upstream) ~= "" then
+  if upstream_ref(repo_path) then
     return { "git", "push" }, branch, nil
   end
 
@@ -600,6 +645,81 @@ local function push_command(repo_path)
   end
 
   return { "git", "push", "--set-upstream", remote, branch }, branch, nil
+end
+
+local function sync_command(repo_path)
+  local branch, err = current_branch(repo_path)
+  if not branch then
+    return nil, nil, err
+  end
+
+  if upstream_ref(repo_path) then
+    return { "git", "pull", "--ff-only" }, branch, nil
+  end
+
+  local remote = configured_remote(repo_path, branch)
+  if not remote then
+    return nil, branch, "No git remote configured for this repository"
+  end
+
+  return { "git", "fetch", "--prune", remote }, branch, nil
+end
+
+local function queue_remote_check(repo, opts)
+  local remote_state = repo_remote_state(repo.path)
+  if remote_state.checking then
+    return
+  end
+
+  if remote_state.checked and not (opts and opts.force) then
+    return
+  end
+
+  local args, err = remote_check_command(repo.path)
+  if not args then
+    set_repo_remote_state(repo.path, {
+      checking = false,
+      checked = false,
+      error = err,
+    })
+    schedule_sidebar_refresh()
+    return
+  end
+
+  set_repo_remote_state(repo.path, {
+    checking = true,
+    checked = false,
+    error = false,
+  })
+  schedule_sidebar_refresh()
+
+  run_system_async(args, {
+    cwd = repo.path,
+    text = true,
+  }, function(result)
+    if result.code ~= 0 then
+      set_repo_remote_state(repo.path, {
+        checking = false,
+        checked = false,
+        error = trim(result.stderr or result.stdout or "git fetch failed"),
+      })
+      schedule_sidebar_refresh()
+      return
+    end
+
+    set_repo_remote_state(repo.path, {
+      checking = false,
+      checked = true,
+      error = false,
+    })
+    schedule_sidebar_refresh()
+  end)
+end
+
+local function queue_remote_checks(repos, opts)
+  for _, repo in ipairs(repos or {}) do
+    queue_remote_check(repo, opts)
+  end
 end
 
 local function normalize_commit_message(text)
@@ -698,7 +818,7 @@ local function placeholder_buf()
     "Workspace Source Control",
     "",
     "Select a changed file from the left panel to open a unified diff.",
-    "Select a repo action to generate a commit message, commit, or push.",
+    "Select a repo action to sync, generate a commit message, commit, or push.",
     "",
     "Controls:",
     "  <CR> / o  open file diff or run action",
@@ -724,7 +844,9 @@ local function apply_sidebar_mappings(buf)
   map("o", M.open_selected, "Open selected Git item")
   map("<Tab>", M.toggle_selected, "Toggle selected Git tree item")
   map("za", M.toggle_selected, "Toggle selected Git tree item")
-  map("r", M.refresh, "Refresh Git panel")
+  map("r", function()
+    M.refresh({ check_remote = true, force_remote_check = true })
+  end, "Refresh Git panel")
   map("q", M.close, "Close Git tab")
 end
 
@@ -830,10 +952,19 @@ end
 
 local function render_repo_actions(lines, repo)
   local action_state = repo_action_state(repo.path)
+  local remote_state = repo_remote_state(repo.path)
   local has_changes = not vim.tbl_isempty(repo.files)
   local message = action_state.commit_message
   local show_push = repo.push and repo.push.push_available
   local push_branch = repo.push and repo.push.branch or trim(repo.branch)
+  local behind = repo.push and repo.push.behind or 0
+  local sync_suffix = ""
+
+  if remote_state.checking then
+    sync_suffix = "  …"
+  elseif remote_state.checked and behind > 0 then
+    sync_suffix = "  ↓" .. behind
+  end
 
   if action_state.busy then
     add_sidebar_line(lines, {
@@ -851,6 +982,14 @@ local function render_repo_actions(lines, repo)
       highlight = "DiagnosticError",
     }, "   ! " .. shorten(action_state.error, 28))
   end
+
+  add_sidebar_line(lines, {
+    kind = "action",
+    repo = repo,
+    action = "sync",
+    focus_target = "sync",
+    highlight = "Special",
+  }, "   [ Sync ]" .. sync_suffix)
 
   if show_push then
     add_sidebar_line(lines, {
@@ -922,7 +1061,7 @@ function M.render(repos)
       kind = "repo",
       repo = repo,
       focus_target = "repo",
-    }, string.format(" %s %s  %s  %s", expanded and "▾" or "▸", repo.name, repo.branch, repo.summary))
+    }, string.format(" %s %s  %s", expanded and "▾" or "▸", repo.name, repo.branch))
 
     if expanded then
       render_repo_actions(lines, repo)
@@ -1194,6 +1333,61 @@ local function run_repo_action(repo, action_name)
         )
         schedule_sidebar_refresh()
       end)
+    end)
+    return
+  end
+
+  if action_name == "sync" then
+    local args, branch, err = sync_command(repo.path)
+    if not args then
+      set_repo_action_state(repo.path, {
+        error = err,
+      })
+      set_sidebar_focus(repo.path, "sync")
+      notify_result(err, vim.log.levels.ERROR)
+      schedule_sidebar_refresh()
+      return
+    end
+
+    set_repo_action_state(repo.path, {
+      busy = "Syncing branch " .. branch .. "...",
+      busy_focus = "busy_sync",
+      error = false,
+      info = false,
+    })
+    set_sidebar_focus(repo.path, "busy_sync")
+    schedule_sidebar_refresh()
+
+    run_system_async(args, {
+      cwd = repo.path,
+      text = true,
+    }, function(sync_result)
+      if sync_result.code ~= 0 then
+        set_repo_action_state(repo.path, {
+          busy = false,
+          busy_focus = false,
+          error = trim(sync_result.stderr or sync_result.stdout or "git sync failed"),
+        })
+        set_sidebar_focus(repo.path, "sync")
+        notify_result("git sync failed for " .. repo.name, vim.log.levels.ERROR)
+        schedule_sidebar_refresh()
+        return
+      end
+
+      set_repo_action_state(repo.path, {
+        busy = false,
+        busy_focus = false,
+        error = false,
+        info = false,
+      })
+      set_repo_remote_state(repo.path, {
+        checking = false,
+        checked = true,
+        error = false,
+      })
+      set_sidebar_focus(repo.path, "sync")
+      restore_placeholder_view()
+      schedule_sidebar_refresh()
     end)
     return
   end
@@ -1827,12 +2021,19 @@ function M.open_selected()
   end
 end
 
-function M.refresh()
+function M.refresh(opts)
   if not is_valid_tab(state.tabpage) then
     return
   end
 
-  M.render()
+  local repos = M.collect()
+  M.render(repos)
+
+  if opts and opts.check_remote then
+    queue_remote_checks(repos, {
+      force = opts.force_remote_check,
+    })
+  end
 end
 
 function M.jump_change(direction)
@@ -1908,6 +2109,7 @@ end
 
 function M.open()
   ensure_layout()
+  M.refresh({ check_remote = true, force_remote_check = true })
   start_refresh_timer()
 end
 
