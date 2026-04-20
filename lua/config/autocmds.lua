@@ -705,11 +705,17 @@ local function keep_nvim_tree_node_visible()
     return
   end
 
-  local margin = 4
+  local max_visible_prefix = 4
+  if available_width <= 18 then
+    max_visible_prefix = 3
+  end
+  if available_width <= 12 then
+    max_visible_prefix = 2
+  end
   local target_leftcol = 0
 
-  if prefix_width > available_width - margin then
-    target_leftcol = math.max(0, prefix_width - 2)
+  if prefix_width > max_visible_prefix then
+    target_leftcol = math.max(0, prefix_width - max_visible_prefix)
   end
 
   local view = vim.fn.winsaveview()
@@ -761,8 +767,9 @@ local function show_nvim_tree_name_popup()
   local wininfo = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1] or {}
   local available_width = vim.api.nvim_win_get_width(0) - (wininfo.textoff or 0)
   local visible_prefix = math.max(prefix_width - view.leftcol, 0)
+  local visible_name_width = math.max(available_width - visible_prefix, 0)
 
-  if available_width <= 0 or (view.leftcol == 0 and visible_prefix + name_width < available_width) then
+  if available_width <= 0 or name_width <= visible_name_width then
     hide_nvim_tree_name_popup()
     return
   end
@@ -833,6 +840,22 @@ local function sync_visible_nvim_tree_to_buffer(bufnr)
     return
   end
 
+  local function sync_tree_view()
+    local current_tree_win = tree_api.tree.winid()
+    if type(current_tree_win) ~= "number" or not vim.api.nvim_win_is_valid(current_tree_win) then
+      return
+    end
+
+    vim.api.nvim_win_call(current_tree_win, function()
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      local height = vim.api.nvim_win_get_height(0)
+      local topline = math.max(cursor[1] - math.floor(height / 2), 1)
+      vim.fn.winrestview({ topline = topline })
+      keep_nvim_tree_node_visible()
+      show_nvim_tree_name_popup()
+    end)
+  end
+
   local ok_finder, finder = pcall(require, "nvim-tree.actions.finders.find-file")
   if ok_finder and finder and finder.fn then
     finder.fn(path)
@@ -845,13 +868,10 @@ local function sync_visible_nvim_tree_to_buffer(bufnr)
     })
   end
 
-  vim.api.nvim_win_call(tree_win, function()
-    local cursor = vim.api.nvim_win_get_cursor(0)
-    local height = vim.api.nvim_win_get_height(0)
-    local topline = math.max(cursor[1] - math.floor(height / 2), 1)
-    vim.fn.winrestview({ topline = topline })
-    keep_nvim_tree_node_visible()
-  end)
+  sync_tree_view()
+  vim.schedule(sync_tree_view)
+  vim.defer_fn(sync_tree_view, 40)
+  vim.defer_fn(sync_tree_view, 120)
 end
 
 vim.api.nvim_create_autocmd("TextYankPost", {
