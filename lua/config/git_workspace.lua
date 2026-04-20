@@ -29,6 +29,7 @@ local current_branch
 local configured_remote
 local current_sidebar_item
 local render_sidebar_status
+local repo_entry
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -242,10 +243,12 @@ end
 local function repo_status_snapshot(repos)
   local chunks = {}
 
-  for _, repo in ipairs(repos) do
+  local function append_repo(repo)
     local push = repo.push or {}
     chunks[#chunks + 1] = table.concat({
       repo.path,
+      tostring(repo.initialized ~= false),
+      repo.display_name or repo.name or "",
       repo.branch or "",
       repo.summary or "",
       tostring(push.push_available or false),
@@ -254,9 +257,24 @@ local function repo_status_snapshot(repos)
       tostring(push.behind or 0),
       table.concat(repo.status_lines or {}, "\n"),
     }, "\n")
+
+    for _, submodule in ipairs(repo.submodules or {}) do
+      append_repo(submodule)
+    end
+  end
+
+  for _, repo in ipairs(repos) do
+    append_repo(repo)
   end
 
   return table.concat(chunks, "\n---\n")
+end
+
+local function each_repo(repos, callback)
+  for _, repo in ipairs(repos or {}) do
+    callback(repo)
+    each_repo(repo.submodules, callback)
+  end
 end
 
 local function trim(text)
@@ -276,6 +294,10 @@ local function shorten(text, max_width)
   end
 
   return vim.fn.strcharpart(text, 0, math.max(max_width - 1, 1)) .. "…"
+end
+
+local function repo_title(repo)
+  return trim((repo and (repo.display_name or repo.name)) or "")
 end
 
 local function repo_action_state(repo_path)
@@ -400,18 +422,122 @@ local function parse_file_status(line)
   }
 end
 
-local function repo_entry(path)
+local function submodule_definitions(repo_path)
+  if uv.fs_stat(join(repo_path, ".gitmodules")) == nil then
+    return {}
+  end
+
+  local output = run_git({
+    "git",
+    "config",
+    "--file",
+    ".gitmodules",
+    "--get-regexp",
+    "^submodule\\..*\\.path$",
+  }, repo_path)
+
+  if not output then
+    return {}
+  end
+
+  local definitions = {}
+  for _, line in ipairs(vim.split(trim(output), "\n", { trimempty = true })) do
+    local relpath = trim(line:match("^.-%s+(.+)$"))
+    if relpath ~= "" then
+      table.insert(definitions, {
+        relpath = relpath,
+        path = vim.fs.normalize(join(repo_path, relpath)),
+      })
+    end
+  end
+
+  table.sort(definitions, function(a, b)
+    return a.relpath < b.relpath
+  end)
+
+  return definitions
+end
+
+local function uninitialized_submodule_entry(parent_repo_path, definition)
+  return {
+    name = vim.fs.basename(definition.relpath),
+    display_name = definition.relpath,
+    path = definition.path,
+    branch = "(uninitialized)",
+    summary = "submodule not initialized",
+    counts = {
+      staged = 0,
+      unstaged = 0,
+      untracked = 0,
+      conflicts = 0,
+    },
+    status_lines = { "submodule not initialized" },
+    files = {},
+    push = {
+      push_available = false,
+      has_upstream = false,
+      ahead = 0,
+      behind = 0,
+    },
+    submodules = {},
+    is_submodule = true,
+    initialized = false,
+    parent_repo_path = parent_repo_path,
+    submodule_path = definition.relpath,
+  }
+end
+
+local function collect_submodule_entries(repo_path, seen)
+  local submodules = {}
+
+  for _, definition in ipairs(submodule_definitions(repo_path)) do
+    if not seen[definition.path] then
+      if is_git_repo(definition.path) then
+        table.insert(submodules, repo_entry(definition.path, {
+          display_name = definition.relpath,
+          is_submodule = true,
+          initialized = true,
+          parent_repo_path = repo_path,
+          submodule_path = definition.relpath,
+        }, seen))
+      else
+        seen[definition.path] = true
+        table.insert(submodules, uninitialized_submodule_entry(repo_path, definition))
+      end
+    end
+  end
+
+  table.sort(submodules, function(a, b)
+    return (a.display_name or a.name) < (b.display_name or b.name)
+  end)
+
+  return submodules
+end
+
+repo_entry = function(path, opts, seen)
+  opts = opts or {}
+  seen = seen or {}
+  path = vim.fs.normalize(path)
+  seen[path] = true
+
   local name = vim.fs.basename(path)
+  local display_name = opts.display_name or name
   local output, err = run_git({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all" }, path)
 
   if not output then
     return {
       name = name,
+      display_name = display_name,
       path = path,
       branch = "(unavailable)",
       summary = err ~= "" and err or "git status failed",
       status_lines = {},
       files = {},
+      submodules = {},
+      is_submodule = opts.is_submodule == true,
+      initialized = opts.initialized ~= false,
+      parent_repo_path = opts.parent_repo_path,
+      submodule_path = opts.submodule_path,
     }
   end
 
@@ -434,6 +560,7 @@ local function repo_entry(path)
 
   return {
     name = name,
+    display_name = display_name,
     path = path,
     branch = branch,
     summary = format_counts(counts),
@@ -441,6 +568,11 @@ local function repo_entry(path)
     status_lines = lines,
     files = files,
     push = push,
+    submodules = collect_submodule_entries(path, seen),
+    is_submodule = opts.is_submodule == true,
+    initialized = opts.initialized ~= false,
+    parent_repo_path = opts.parent_repo_path,
+    submodule_path = opts.submodule_path,
   }
 end
 
@@ -448,16 +580,17 @@ function M.collect(root)
   root = vim.fs.normalize(root or uv.cwd())
 
   local repos = {}
+  local seen = {}
 
   if is_git_repo(root) then
-    table.insert(repos, repo_entry(root))
+    table.insert(repos, repo_entry(root, nil, seen))
   end
 
   for name, kind in vim.fs.dir(root) do
     if kind == "directory" then
       local path = join(root, name)
-      if is_git_repo(path) then
-        table.insert(repos, repo_entry(path))
+      if is_git_repo(path) and not seen[vim.fs.normalize(path)] then
+        table.insert(repos, repo_entry(path, nil, seen))
       end
     end
   end
@@ -558,7 +691,12 @@ local function upstream_ref(repo_path)
   return upstream
 end
 
-local function remote_check_command(repo_path)
+local function remote_check_command(repo)
+  if repo.initialized == false then
+    return nil, nil
+  end
+
+  local repo_path = repo.path
   local branch, err = current_branch(repo_path)
   if not branch then
     return nil, err
@@ -590,25 +728,51 @@ local function push_command(repo_path)
   return { "git", "push", "--set-upstream", remote, branch }, branch, nil
 end
 
-local function sync_command(repo_path)
+local function sync_command(repo)
+  if repo.initialized == false then
+    if repo.is_submodule and repo.parent_repo_path and repo.submodule_path then
+      return {
+        "git",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+        "--",
+        repo.submodule_path,
+      }, repo.submodule_path, nil, repo.parent_repo_path
+    end
+
+    return nil, nil, "Submodule not initialized", nil
+  end
+
+  local repo_path = repo.path
   local branch, err = current_branch(repo_path)
   if not branch then
-    return nil, nil, err
+    return nil, nil, err, nil
   end
 
   if upstream_ref(repo_path) then
-    return { "git", "pull", "--ff-only" }, branch, nil
+    return { "git", "pull", "--ff-only" }, branch, nil, repo_path
   end
 
   local remote = configured_remote(repo_path, branch)
   if not remote then
-    return nil, branch, "No git remote configured for this repository"
+    return nil, branch, "No git remote configured for this repository", nil
   end
 
-  return { "git", "fetch", "--prune", remote }, branch, nil
+  return { "git", "fetch", "--prune", remote }, branch, nil, repo_path
 end
 
 local function queue_remote_check(repo, opts)
+  if repo.initialized == false then
+    set_repo_remote_state(repo.path, {
+      checking = false,
+      checked = false,
+      error = false,
+    })
+    return
+  end
+
   local remote_state = repo_remote_state(repo.path)
   if remote_state.checking then
     return
@@ -618,8 +782,11 @@ local function queue_remote_check(repo, opts)
     return
   end
 
-  local args, err = remote_check_command(repo.path)
+  local args, err = remote_check_command(repo)
   if not args then
+    if not err then
+      return
+    end
     set_repo_remote_state(repo.path, {
       checking = false,
       checked = false,
@@ -660,9 +827,9 @@ local function queue_remote_check(repo, opts)
 end
 
 local function queue_remote_checks(repos, opts)
-  for _, repo in ipairs(repos or {}) do
+  each_repo(repos, function(repo)
     queue_remote_check(repo, opts)
-  end
+  end)
 end
 
 local function normalize_commit_message(text)
@@ -929,31 +1096,42 @@ local function add_sidebar_line(lines, item, text)
   end
 end
 
-local function add_wrapped_sidebar_lines(lines, item, text)
-  for _, wrapped in ipairs(wrap_sidebar_text(text, "     ")) do
+local function add_wrapped_sidebar_lines(lines, item, text, indent)
+  for _, wrapped in ipairs(wrap_sidebar_text(text, indent or "     ")) do
     add_sidebar_line(lines, item, wrapped)
   end
 end
 
-local function render_repo_files(lines, repo)
+local function repo_header_indent(depth)
+  return " " .. string.rep("  ", depth or 0)
+end
+
+local function repo_content_indent(depth)
+  return "   " .. string.rep("  ", depth or 0)
+end
+
+local function render_repo_files(lines, repo, depth)
+  local indent = repo_content_indent(depth)
   for _, file in ipairs(repo.files or {}) do
     add_sidebar_line(lines, {
       kind = "file",
       repo = repo,
       file = file,
       focus_target = "file:" .. file.path,
-    }, string.format("   [%s] %s", file.code, vim.fs.basename(file.path)))
+    }, string.format("%s[%s] %s", indent, file.code, vim.fs.basename(file.path)))
   end
 end
 
-local function render_repo_actions(lines, repo)
+local function render_repo_actions(lines, repo, depth)
   local action_state = repo_action_state(repo.path)
   local remote_state = repo_remote_state(repo.path)
-  local has_changes = not vim.tbl_isempty(repo.files)
+  local indent = repo_content_indent(depth)
+  local message_indent = indent .. "  "
+  local has_changes = repo.initialized ~= false and not vim.tbl_isempty(repo.files)
   local message = action_state.commit_message
-  local show_push = repo.push and repo.push.push_available
+  local show_push = repo.initialized ~= false and repo.push and repo.push.push_available
   local push_branch = repo.push and repo.push.branch or trim(repo.branch)
-  local behind = repo.push and repo.push.behind or 0
+  local behind = repo.initialized ~= false and repo.push and repo.push.behind or 0
   local sync_suffix = ""
 
   if remote_state.checking then
@@ -968,7 +1146,7 @@ local function render_repo_actions(lines, repo)
       repo = repo,
       focus_target = action_state.busy_focus or "busy",
       highlight = "Comment",
-    }, "   … " .. shorten(action_state.busy, 28))
+    }, indent .. "… " .. shorten(action_state.busy, 28))
   end
 
   if action_state.error then
@@ -976,7 +1154,7 @@ local function render_repo_actions(lines, repo)
       kind = "status",
       repo = repo,
       highlight = "DiagnosticError",
-    }, "   ! " .. shorten(action_state.error, 28))
+    }, indent .. "! " .. shorten(action_state.error, 28))
   end
 
   add_sidebar_line(lines, {
@@ -985,7 +1163,16 @@ local function render_repo_actions(lines, repo)
     action = "sync",
     focus_target = "sync",
     highlight = "Special",
-  }, "   [ Sync ]" .. sync_suffix)
+  }, indent .. "[ " .. (repo.initialized == false and "Init" or "Sync") .. " ]" .. sync_suffix)
+
+  if repo.initialized == false then
+    add_sidebar_line(lines, {
+      kind = "status",
+      repo = repo,
+      highlight = "Comment",
+    }, indent .. shorten(repo.summary, 28))
+    return
+  end
 
   if show_push then
     add_sidebar_line(lines, {
@@ -994,7 +1181,7 @@ local function render_repo_actions(lines, repo)
       action = "push",
       focus_target = "push",
       highlight = "Identifier",
-    }, "   [ Push " .. shorten(push_branch, 18) .. " ]")
+    }, indent .. "[ Push " .. shorten(push_branch, 18) .. " ]")
   end
 
   if message and has_changes then
@@ -1004,7 +1191,7 @@ local function render_repo_actions(lines, repo)
       action = "commit",
       focus_target = "commit",
       highlight = "DiffAdd",
-    }, "   [ Commit staged changes ]")
+    }, indent .. "[ Commit staged changes ]")
   end
 
   if has_changes and action_state.busy_focus ~= "busy_generate_message" then
@@ -1014,7 +1201,7 @@ local function render_repo_actions(lines, repo)
       action = "generate_message",
       focus_target = "generate_message",
       highlight = "Function",
-    }, "   [ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
+    }, indent .. "[ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
   end
 
   if message then
@@ -1022,8 +1209,48 @@ local function render_repo_actions(lines, repo)
       kind = "message",
       repo = repo,
       highlight = "String",
-    }, message)
+    }, message, message_indent)
   end
+end
+
+local function render_repo_block(lines, repo, depth)
+  depth = depth or 0
+
+  local expanded = state.repo_expanded[repo.path]
+  if expanded == nil then
+    expanded = depth == 0
+    state.repo_expanded[repo.path] = expanded
+  end
+
+  local label = repo_title(repo)
+  if depth > 0 then
+    label = "↳ " .. label
+  end
+
+  add_sidebar_line(lines, {
+    kind = "repo",
+    repo = repo,
+    focus_target = "repo",
+  }, string.format("%s%s %s  %s", repo_header_indent(depth), expanded and "▾" or "▸", label, repo.branch))
+
+  if expanded then
+    render_repo_actions(lines, repo, depth)
+
+    for _, submodule in ipairs(repo.submodules or {}) do
+      render_repo_block(lines, submodule, depth + 1)
+    end
+
+    if vim.tbl_isempty(repo.files) and vim.tbl_isempty(repo.submodules or {}) then
+      add_sidebar_line(lines, {
+        kind = "status",
+        highlight = "Comment",
+      }, repo_content_indent(depth) .. "No changes")
+    elseif not vim.tbl_isempty(repo.files) then
+      render_repo_files(lines, repo, depth)
+    end
+  end
+
+  table.insert(lines, "")
 end
 
 function M.render(repos)
@@ -1047,32 +1274,7 @@ function M.render(repos)
   end
 
   for _, repo in ipairs(repos) do
-    local expanded = state.repo_expanded[repo.path]
-    if expanded == nil then
-      expanded = true
-      state.repo_expanded[repo.path] = true
-    end
-
-    add_sidebar_line(lines, {
-      kind = "repo",
-      repo = repo,
-      focus_target = "repo",
-    }, string.format(" %s %s  %s", expanded and "▾" or "▸", repo.name, repo.branch))
-
-    if expanded then
-      render_repo_actions(lines, repo)
-
-      if vim.tbl_isempty(repo.files) then
-        add_sidebar_line(lines, {
-          kind = "status",
-          highlight = "Comment",
-        }, "   No changes")
-      else
-        render_repo_files(lines, repo)
-      end
-    end
-
-    table.insert(lines, "")
+    render_repo_block(lines, repo, 0)
   end
 
   table.insert(lines, "  <CR> open/run   <Tab> toggle repo")
@@ -1173,9 +1375,10 @@ local function show_action_output(title, body_lines, filetype)
 end
 
 local function run_repo_action(repo, action_name)
+  local title = repo_title(repo)
   local action_state = repo_action_state(repo.path)
   if action_state.busy then
-    notify_result("Git action already running for " .. repo.name, vim.log.levels.WARN)
+    notify_result("Git action already running for " .. title, vim.log.levels.WARN)
     return
   end
 
@@ -1234,7 +1437,7 @@ local function run_repo_action(repo, action_name)
           error = trim(result.stderr or result.stdout or "Failed to generate commit message"),
         })
         set_sidebar_focus(repo.path, "generate_message")
-        notify_result("Failed to generate commit message for " .. repo.name, vim.log.levels.ERROR)
+        notify_result("Failed to generate commit message for " .. title, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
       end
@@ -1260,7 +1463,7 @@ local function run_repo_action(repo, action_name)
     end
 
     if vim.tbl_isempty(repo.files) then
-      notify_result("No changes to commit in " .. repo.name, vim.log.levels.WARN)
+      notify_result("No changes to commit in " .. title, vim.log.levels.WARN)
       return
     end
 
@@ -1284,7 +1487,7 @@ local function run_repo_action(repo, action_name)
           error = trim(add_result.stderr or add_result.stdout or "git add failed"),
         })
         set_sidebar_focus(repo.path, "commit")
-        notify_result("git add failed for " .. repo.name, vim.log.levels.ERROR)
+        notify_result("git add failed for " .. title, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
       end
@@ -1305,7 +1508,7 @@ local function run_repo_action(repo, action_name)
             error = trim(commit_result.stderr or commit_result.stdout or "git commit failed"),
           })
           set_sidebar_focus(repo.path, "commit")
-          notify_result("git commit failed for " .. repo.name, vim.log.levels.ERROR)
+          notify_result("git commit failed for " .. title, vim.log.levels.ERROR)
           schedule_sidebar_refresh()
           return
         end
@@ -1321,7 +1524,7 @@ local function run_repo_action(repo, action_name)
       })
       set_sidebar_focus(repo.path, "push")
         show_action_output(
-          "Commit Result · " .. repo.name,
+          "Commit Result · " .. title,
           vim.split(trim(commit_result.stdout or "Commit created"), "\n", { trimempty = true }),
           ""
         )
@@ -1332,7 +1535,7 @@ local function run_repo_action(repo, action_name)
   end
 
   if action_name == "sync" then
-    local args, branch, err = sync_command(repo.path)
+    local args, branch, err, action_cwd = sync_command(repo)
     if not args then
       set_repo_action_state(repo.path, {
         error = err,
@@ -1344,7 +1547,7 @@ local function run_repo_action(repo, action_name)
     end
 
     set_repo_action_state(repo.path, {
-      busy = "Syncing branch " .. branch .. "...",
+      busy = repo.initialized == false and ("Initializing submodule " .. title .. "...") or ("Syncing branch " .. branch .. "..."),
       busy_focus = "busy_sync",
       error = false,
       info = false,
@@ -1353,7 +1556,7 @@ local function run_repo_action(repo, action_name)
     schedule_sidebar_refresh()
 
     run_system_async(args, {
-      cwd = repo.path,
+      cwd = action_cwd or repo.path,
       text = true,
     }, function(sync_result)
       if sync_result.code ~= 0 then
@@ -1363,7 +1566,7 @@ local function run_repo_action(repo, action_name)
           error = trim(sync_result.stderr or sync_result.stdout or "git sync failed"),
         })
         set_sidebar_focus(repo.path, "sync")
-        notify_result("git sync failed for " .. repo.name, vim.log.levels.ERROR)
+        notify_result("git sync failed for " .. title, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
       end
@@ -1417,7 +1620,7 @@ local function run_repo_action(repo, action_name)
           error = trim(push_result.stderr or push_result.stdout or "git push failed"),
         })
         set_sidebar_focus(repo.path, "push")
-        notify_result("git push failed for " .. repo.name, vim.log.levels.ERROR)
+        notify_result("git push failed for " .. title, vim.log.levels.ERROR)
         schedule_sidebar_refresh()
         return
       end
