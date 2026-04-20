@@ -36,6 +36,10 @@ function M.increase(step)
   return M.set(M.get() + (step or STEP))
 end
 
+function M.decrease(step)
+  return M.set(M.get() - (step or STEP))
+end
+
 function M.arm_repeat()
   repeat_deadline = now_ms() + REPEAT_TIMEOUT_MS
 end
@@ -62,6 +66,12 @@ end
 
 function M.widen_with_repeat(step)
   M.increase(step)
+  M.arm_repeat()
+  return M.apply()
+end
+
+function M.narrow_with_repeat(step)
+  M.decrease(step)
   M.arm_repeat()
   return M.apply()
 end

@@ -177,6 +177,7 @@ That means:
 | --- | --- |
 | `Space e` | Show / hide file tree |
 | `Space E` | Focus file tree |
+| `Space [` | Narrow file tree |
 | `Space ]` | Widen file tree |
 | `Space ff` | Find files |
 | `Space fg` | Search text globally |
