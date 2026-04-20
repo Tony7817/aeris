@@ -428,6 +428,14 @@ local function apply_ui_highlights()
   vim.api.nvim_set_hl(0, "ScrollbarGitChangeHandle", { bg = "#a6e3a1", fg = "#a6e3a1" })
   vim.api.nvim_set_hl(0, "ScrollbarGitDelete", { bg = normal_bg, fg = "#f38ba8" })
   vim.api.nvim_set_hl(0, "ScrollbarGitDeleteHandle", { bg = "#f38ba8", fg = "#f38ba8" })
+  set_many({ "GitSignsAdd", "GitSignsChange", "GitSignsChangedelete", "GitSignsUntracked" }, {
+    fg = "#a6e3a1",
+    bg = normal_bg,
+  })
+  set_many({ "GitSignsDelete", "GitSignsTopdelete" }, {
+    fg = "#f38ba8",
+    bg = normal_bg,
+  })
   vim.api.nvim_set_hl(0, "RainbowDelimiterAeris1", { fg = vscode.bracket1 })
   vim.api.nvim_set_hl(0, "RainbowDelimiterAeris2", { fg = vscode.bracket2 })
   vim.api.nvim_set_hl(0, "MatchParen", { fg = vscode.bracket1, bold = true, underline = false, bg = nil })
