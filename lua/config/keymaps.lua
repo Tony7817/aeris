@@ -115,8 +115,17 @@ end
 
 local function widen_file_tree()
   local tree_width = require("config.tree_width")
-  tree_width.increase()
-  tree_width.apply()
+  tree_width.widen_with_repeat()
+end
+
+local function repeat_widen_file_tree()
+  local tree_width = require("config.tree_width")
+  if not tree_width.repeat_active() then
+    return "]"
+  end
+
+  tree_width.widen_with_repeat()
+  return ""
 end
 
 map("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear search highlight" })
@@ -129,6 +138,7 @@ map("n", "<D-Right>", "<C-i>", { desc = "Jump forward" })
 map("n", "<leader>e", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle file tree" })
 map("n", "<leader>E", "<cmd>NvimTreeFocus<CR>", { desc = "Focus file tree" })
 map("n", "<leader>]", widen_file_tree, { desc = "Widen file tree" })
+map("n", "]", repeat_widen_file_tree, { expr = true, remap = true, desc = "Repeat widen file tree" })
 map("n", "<Tab>", "<cmd>BufferLineCycleNext<CR>", { desc = "Next buffer tab" })
 map("n", "<S-Tab>", "<cmd>BufferLineCyclePrev<CR>", { desc = "Previous buffer tab" })
 map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Close buffer" })

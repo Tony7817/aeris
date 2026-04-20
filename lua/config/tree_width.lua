@@ -3,8 +3,15 @@ local M = {}
 local DEFAULT_WIDTH = 22
 local MIN_WIDTH = 18
 local STEP = 4
+local REPEAT_TIMEOUT_MS = 1200
 
 local current_width = DEFAULT_WIDTH
+local repeat_deadline = 0
+
+local function now_ms()
+  local uv = vim.uv or vim.loop
+  return uv.now()
+end
 
 local function max_width()
   return math.max(MIN_WIDTH, vim.o.columns - 24)
@@ -29,6 +36,14 @@ function M.increase(step)
   return M.set(M.get() + (step or STEP))
 end
 
+function M.arm_repeat()
+  repeat_deadline = now_ms() + REPEAT_TIMEOUT_MS
+end
+
+function M.repeat_active()
+  return repeat_deadline > 0 and now_ms() <= repeat_deadline
+end
+
 function M.apply()
   local ok, tree_api = pcall(require, "nvim-tree.api")
   if ok then
@@ -43,6 +58,12 @@ function M.apply()
   end
 
   return M.get()
+end
+
+function M.widen_with_repeat(step)
+  M.increase(step)
+  M.arm_repeat()
+  return M.apply()
 end
 
 return M
