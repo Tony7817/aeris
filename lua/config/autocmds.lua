@@ -476,13 +476,18 @@ local function apply_ui_highlights()
   vim.api.nvim_set_hl(0, "DiagnosticFloatingInfo", { fg = vscode.terminal_fg })
 end
 
-local function jump_to_implementation_or_definition()
+local open_quickfix_and_close_on_enter
+
+local function jump_to_implementation(opts)
+  opts = opts or {}
   local bufnr = vim.api.nvim_get_current_buf()
   local params = vim.lsp.util.make_position_params()
   local clients = vim.lsp.get_clients({ bufnr = bufnr, method = "textDocument/implementation" })
 
   if vim.tbl_isempty(clients) then
-    vim.lsp.buf.definition()
+    if opts.fallback_to_definition then
+      vim.lsp.buf.definition()
+    end
     return
   end
 
@@ -503,7 +508,11 @@ local function jump_to_implementation_or_definition()
     end
 
     if vim.tbl_isempty(locations) then
-      vim.lsp.buf.definition()
+      if opts.fallback_to_definition then
+        vim.lsp.buf.definition()
+      else
+        vim.notify("No implementations found", vim.log.levels.INFO)
+      end
       return
     end
 
@@ -512,15 +521,18 @@ local function jump_to_implementation_or_definition()
       return
     end
 
-    vim.fn.setqflist({}, " ", {
-      title = "LSP implementations",
-      items = vim.lsp.util.locations_to_items(locations, offset_encoding),
-    })
-    vim.cmd.copen()
+    open_quickfix_and_close_on_enter(
+      "LSP implementations",
+      vim.lsp.util.locations_to_items(locations, offset_encoding)
+    )
   end)
 end
 
-local function open_quickfix_and_close_on_enter(title, items)
+local function jump_to_implementation_or_definition()
+  jump_to_implementation({ fallback_to_definition = true })
+end
+
+open_quickfix_and_close_on_enter = function(title, items)
   vim.fn.setqflist({}, " ", {
     title = title,
     items = items,
@@ -1042,7 +1054,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
     map("n", "<F12>", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
     map("n", "gd", vim.lsp.buf.definition, vim.tbl_extend("force", opts, { desc = "Go to definition" }))
     map("n", "gr", jump_to_references, vim.tbl_extend("force", opts, { desc = "Go to references" }))
-    map("n", "gi", vim.lsp.buf.implementation, vim.tbl_extend("force", opts, { desc = "Go to implementation" }))
+    map("n", "gi", jump_to_implementation, vim.tbl_extend("force", opts, { desc = "Go to implementation" }))
     map("n", "K", vim.lsp.buf.hover, vim.tbl_extend("force", opts, { desc = "Hover documentation" }))
     map("n", "<leader>ds", vim.lsp.buf.document_symbol, vim.tbl_extend("force", opts, { desc = "Document symbols" }))
   end,
