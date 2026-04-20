@@ -14,6 +14,8 @@ local state = {
   line_items = {},
   repo_expanded = {},
   repo_actions = {},
+  repo_cache = {},
+  repo_status = {},
   repo_remote = {},
   sidebar_focus = nil,
   sidebar_width = 38,
@@ -21,6 +23,8 @@ local state = {
   repo_snapshot = nil,
   preview_buf = nil,
   preview_signature = nil,
+  status_check_queue = {},
+  status_check_active = false,
   remote_check_queue = {},
   remote_check_active = false,
 }
@@ -36,6 +40,10 @@ local render_sidebar_status
 local render_sidebar_preview
 local repo_entry
 local diff_status_summary
+local run_system_async
+local queue_status_check
+local start_next_status_check
+local queue_status_checks
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -61,9 +69,22 @@ local function stop_refresh_timer()
   end
 end
 
+local function reset_status_check_queue()
+  state.status_check_queue = {}
+  state.status_check_active = false
+  for _, status_state in pairs(state.repo_status) do
+    status_state.queued = false
+    status_state.checking = false
+  end
+end
+
 local function reset_remote_check_queue()
   state.remote_check_queue = {}
   state.remote_check_active = false
+  for _, remote_state in pairs(state.repo_remote) do
+    remote_state.queued = false
+    remote_state.checking = false
+  end
 end
 
 local function in_git_tab(win)
@@ -79,6 +100,7 @@ local function reset_closed_handles()
     state.current_diff = nil
     state.repo_snapshot = nil
     stop_refresh_timer()
+    reset_status_check_queue()
     reset_remote_check_queue()
   end
 
@@ -345,6 +367,14 @@ local function repo_action_state(repo_path)
   return state.repo_actions[repo_path]
 end
 
+local function repo_status_state(repo_path)
+  if state.repo_status[repo_path] == nil then
+    state.repo_status[repo_path] = {}
+  end
+
+  return state.repo_status[repo_path]
+end
+
 local function repo_remote_state(repo_path)
   if state.repo_remote[repo_path] == nil then
     state.repo_remote[repo_path] = {}
@@ -383,6 +413,14 @@ local function set_repo_action_state(repo_path, values)
     repo_state[key] = value
   end
   return repo_state
+end
+
+local function set_repo_status_state(repo_path, values)
+  local status_state = repo_status_state(repo_path)
+  for key, value in pairs(values) do
+    status_state[key] = value
+  end
+  return status_state
 end
 
 local function set_repo_remote_state(repo_path, values)
@@ -575,30 +613,26 @@ local function collect_submodule_entries(repo_path, seen)
   return submodules
 end
 
-repo_entry = function(path, opts, seen)
-  opts = opts or {}
-  seen = seen or {}
-  path = vim.fs.normalize(path)
-  seen[path] = true
+local function empty_counts()
+  return {
+    staged = 0,
+    unstaged = 0,
+    untracked = 0,
+    conflicts = 0,
+  }
+end
 
-  local name = vim.fs.basename(path)
-  local display_name = opts.display_name or name
-  local output, err = run_git({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all" }, path)
-
+local function build_repo_status_data(path, output, err)
   if not output then
     return {
-      name = name,
-      display_name = display_name,
-      path = path,
       branch = "(unavailable)",
       summary = err ~= "" and err or "git status failed",
+      counts = empty_counts(),
       status_lines = {},
       files = {},
-      submodules = {},
-      is_submodule = opts.is_submodule == true,
-      initialized = opts.initialized ~= false,
-      parent_repo_path = opts.parent_repo_path,
-      submodule_path = opts.submodule_path,
+      push = initial_push_state(nil),
+      loading = false,
+      status_error = true,
     }
   end
 
@@ -606,7 +640,6 @@ repo_entry = function(path, opts, seen)
   local branch = lines[1] and parse_branch(lines[1]) or "(unknown)"
   local counts = parse_counts(lines)
   local files = {}
-  local push = initial_push_state(branch)
 
   for _, line in ipairs(lines) do
     local entry = parse_file_status(line)
@@ -620,24 +653,75 @@ repo_entry = function(path, opts, seen)
   end)
 
   return {
-    name = name,
-    display_name = display_name,
-    path = path,
     branch = branch,
     summary = format_counts(counts),
     counts = counts,
     status_lines = lines,
     files = files,
-    push = push,
+    push = initial_push_state(branch),
+    loading = false,
+    status_error = false,
+  }
+end
+
+local function placeholder_repo_status(path)
+  local status_state = repo_status_state(path)
+  if status_state.error then
+    return {
+      branch = "(unavailable)",
+      summary = status_state.error,
+      counts = empty_counts(),
+      status_lines = {},
+      files = {},
+      push = initial_push_state(nil),
+      loading = false,
+      status_error = true,
+    }
+  end
+
+  return {
+    branch = "(loading)",
+    summary = "loading git status...",
+    counts = empty_counts(),
+    status_lines = {},
+    files = {},
+    push = initial_push_state(nil),
+    loading = true,
+    status_error = false,
+  }
+end
+
+repo_entry = function(path, opts, seen)
+  opts = opts or {}
+  seen = seen or {}
+  path = vim.fs.normalize(path)
+  seen[path] = true
+
+  local name = vim.fs.basename(path)
+  local display_name = opts.display_name or name
+  local status_data = state.repo_cache[path] or placeholder_repo_status(path)
+
+  return {
+    name = name,
+    display_name = display_name,
+    path = path,
+    branch = status_data.branch,
+    summary = status_data.summary,
+    counts = status_data.counts,
+    status_lines = status_data.status_lines,
+    files = status_data.files,
+    push = status_data.push,
     submodules = collect_submodule_entries(path, seen),
     is_submodule = opts.is_submodule == true,
     initialized = opts.initialized ~= false,
     parent_repo_path = opts.parent_repo_path,
     submodule_path = opts.submodule_path,
+    loading = status_data.loading == true,
+    status_error = status_data.status_error == true,
   }
 end
 
-function M.collect(root)
+function M.collect(root, opts)
   root = vim.fs.normalize(root or uv.cwd())
 
   local repos = {}
@@ -660,6 +744,12 @@ function M.collect(root)
     return a.name < b.name
   end)
 
+  if opts and opts.check_status then
+    queue_status_checks(repos, {
+      force = opts.force_status_check,
+    })
+  end
+
   return repos
 end
 
@@ -669,6 +759,89 @@ local function schedule_sidebar_refresh()
       M.refresh()
     end
   end)
+end
+
+queue_status_check = function(repo_path, opts)
+  repo_path = vim.fs.normalize(repo_path)
+  local status_state = repo_status_state(repo_path)
+  if status_state.checking or status_state.queued then
+    return
+  end
+
+  if status_state.checked and not (opts and opts.force) then
+    return
+  end
+
+  set_repo_status_state(repo_path, {
+    checking = false,
+    queued = true,
+    checked = status_state.checked == true,
+    error = false,
+  })
+  state.status_check_queue[#state.status_check_queue + 1] = repo_path
+end
+
+start_next_status_check = function()
+  if state.status_check_active then
+    return
+  end
+
+  local repo_path = table.remove(state.status_check_queue, 1)
+  if not repo_path then
+    return
+  end
+
+  state.status_check_active = true
+  set_repo_status_state(repo_path, {
+    checking = true,
+    queued = false,
+    error = false,
+  })
+  schedule_sidebar_refresh()
+
+  run_system_async({
+    "git",
+    "status",
+    "--porcelain=v1",
+    "--branch",
+    "--untracked-files=all",
+  }, {
+    cwd = repo_path,
+    text = true,
+  }, function(result)
+    state.status_check_active = false
+    if result.code ~= 0 then
+      state.repo_cache[repo_path] = nil
+      set_repo_status_state(repo_path, {
+        checking = false,
+        queued = false,
+        checked = false,
+        error = trim(result.stderr or result.stdout or "git status failed"),
+      })
+      schedule_sidebar_refresh()
+      start_next_status_check()
+      return
+    end
+
+    state.repo_cache[repo_path] = build_repo_status_data(repo_path, result.stdout or "", nil)
+    set_repo_status_state(repo_path, {
+      checking = false,
+      queued = false,
+      checked = true,
+      error = false,
+    })
+    schedule_sidebar_refresh()
+    start_next_status_check()
+  end)
+end
+
+queue_status_checks = function(repos, opts)
+  each_repo(repos, function(repo)
+    if repo.initialized ~= false then
+      queue_status_check(repo.path, opts)
+    end
+  end)
+  vim.schedule(start_next_status_check)
 end
 
 local function start_refresh_timer()
@@ -683,7 +856,10 @@ local function start_refresh_timer()
       return
     end
 
-    local repos = M.collect()
+    local repos = M.collect(nil, {
+      check_status = true,
+      force_status_check = true,
+    })
     local snapshot = repo_status_snapshot(repos)
     if snapshot ~= state.repo_snapshot then
       M.render(repos)
@@ -697,7 +873,7 @@ local function notify_result(message, level)
   end)
 end
 
-local function run_system_async(args, opts, callback)
+run_system_async = function(args, opts, callback)
   vim.system(args, opts or {}, function(result)
     vim.schedule(function()
       callback(result)
@@ -1081,6 +1257,14 @@ local function repo_preview_lines(repo)
     table.insert(lines, "Submodule path: " .. (repo.submodule_path or repo_title(repo)))
   end
 
+  if repo.loading then
+    append_preview_section(lines, "Status", {
+      "Git status is loading in the background.",
+      "gw opens immediately now and fills repository details as each status job completes.",
+    })
+    return lines
+  end
+
   if repo.initialized == false then
     append_preview_section(lines, "State", {
       "This submodule is not initialized.",
@@ -1298,7 +1482,12 @@ local function apply_sidebar_mappings(buf)
   map("<Tab>", M.toggle_selected, "Toggle selected Git repo")
   map("za", M.toggle_selected, "Toggle selected Git repo")
   map("r", function()
-    M.refresh({ check_remote = true, force_remote_check = true })
+    M.refresh({
+      check_status = true,
+      force_status_check = true,
+      check_remote = true,
+      force_remote_check = true,
+    })
   end, "Refresh Git panel")
   map("q", M.close, "Close Git tab")
 end
@@ -1519,6 +1708,17 @@ local function render_repo_actions(lines, repo, depth)
   local behind = repo.initialized ~= false and (push.behind or 0) or 0
   local sync_suffix = ""
 
+  if repo.loading then
+    add_sidebar_line(lines, {
+      kind = "status",
+      repo = repo,
+      highlight = "Comment",
+      status_title = "Status",
+      status_text = repo.summary,
+    }, indent .. "… " .. shorten(repo.summary, 28))
+    return
+  end
+
   if remote_state.queued then
     sync_suffix = "  …"
   elseif remote_state.checking then
@@ -1636,7 +1836,9 @@ local function render_repo_block(lines, repo, depth)
       render_repo_block(lines, submodule, depth + 1)
     end
 
-    if vim.tbl_isempty(repo.files) and vim.tbl_isempty(repo.submodules or {}) then
+    if repo.loading then
+      -- The loading status row is rendered by render_repo_actions.
+    elseif vim.tbl_isempty(repo.files) and vim.tbl_isempty(repo.submodules or {}) then
       add_sidebar_line(lines, {
         kind = "status",
         repo = repo,
@@ -2619,7 +2821,10 @@ function M.refresh(opts)
     return
   end
 
-  local repos = M.collect()
+  local repos = M.collect(nil, {
+    check_status = opts and opts.check_status,
+    force_status_check = opts and opts.force_status_check,
+  })
   M.render(repos)
 
   if opts and opts.check_remote then
@@ -2672,6 +2877,7 @@ function M.close()
   state.preview_buf = nil
   state.preview_signature = nil
   stop_refresh_timer()
+  reset_status_check_queue()
   reset_remote_check_queue()
 
   if api.nvim_get_current_tabpage() == tabpage then
@@ -2713,7 +2919,12 @@ end
 
 function M.open()
   ensure_layout()
-  M.refresh({ check_remote = true, force_remote_check = true })
+  M.refresh({
+    check_status = true,
+    force_status_check = true,
+    check_remote = true,
+    force_remote_check = true,
+  })
   start_refresh_timer()
 end
 
