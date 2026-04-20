@@ -1,5 +1,14 @@
 local map = vim.keymap.set
 
+local function jump_back()
+  local ok, diffview_navigation = pcall(require, "config.diffview_navigation")
+  if ok and diffview_navigation.jump_back and diffview_navigation.jump_back() then
+    return
+  end
+
+  vim.cmd("normal! " .. vim.keycode("<C-o>"))
+end
+
 local function goto_git_change(direction)
   local ok_workspace, git_workspace = pcall(require, "config.git_workspace")
   if ok_workspace and git_workspace.jump_change and git_workspace.jump_change(direction) then
@@ -81,8 +90,8 @@ map("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear search highlight" })
 map("n", "<leader>w", "<cmd>write<CR>", { desc = "Write buffer" })
 map("n", "<leader>q", "<cmd>quit<CR>", { desc = "Quit window" })
 map("n", "<leader>Q", "<cmd>qa!<CR>", { desc = "Quit all" })
-map("n", "gb", "<C-o>", { desc = "Jump back" })
-map("n", "<D-Left>", "<C-o>", { desc = "Jump back" })
+map("n", "gb", jump_back, { desc = "Jump back" })
+map("n", "<D-Left>", jump_back, { desc = "Jump back" })
 map("n", "<D-Right>", "<C-i>", { desc = "Jump forward" })
 map("n", "<leader>e", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle file tree" })
 map("n", "<leader>E", "<cmd>NvimTreeFocus<CR>", { desc = "Focus file tree" })

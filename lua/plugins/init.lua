@@ -453,7 +453,22 @@ return {
     dependencies = {
       "nvim-lua/plenary.nvim",
     },
-    opts = {},
+    opts = function()
+      local diffview_navigation = require("config.diffview_navigation")
+
+      return {
+        keymaps = {
+          view = {
+            {
+              "n",
+              "gd",
+              diffview_navigation.goto_definition,
+              { desc = "Go to definition from diff view" },
+            },
+          },
+        },
+      }
+    end,
   },
   {
     "nvim-telescope/telescope.nvim",
