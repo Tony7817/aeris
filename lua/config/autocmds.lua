@@ -809,6 +809,51 @@ local function show_nvim_tree_name_popup()
   vim.wo[nvim_tree_name_popup.win].winhighlight = "Normal:NvimTreeNamePopup"
 end
 
+local function sync_visible_nvim_tree_to_buffer(bufnr)
+  if type(bufnr) ~= "number" or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  if vim.bo[bufnr].filetype == "NvimTree" or vim.bo[bufnr].buftype ~= "" then
+    return
+  end
+
+  local path = normalize_path(vim.api.nvim_buf_get_name(bufnr))
+  if not is_real_file(path) then
+    return
+  end
+
+  local ok, tree_api = pcall(require, "nvim-tree.api")
+  if not ok then
+    return
+  end
+
+  local tree_win = tree_api.tree.winid()
+  if type(tree_win) ~= "number" or not vim.api.nvim_win_is_valid(tree_win) then
+    return
+  end
+
+  local ok_finder, finder = pcall(require, "nvim-tree.actions.finders.find-file")
+  if ok_finder and finder and finder.fn then
+    finder.fn(path)
+  else
+    tree_api.tree.find_file({
+      buf = bufnr,
+      focus = false,
+      open = false,
+      update_root = true,
+    })
+  end
+
+  vim.api.nvim_win_call(tree_win, function()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local height = vim.api.nvim_win_get_height(0)
+    local topline = math.max(cursor[1] - math.floor(height / 2), 1)
+    vim.fn.winrestview({ topline = topline })
+    keep_nvim_tree_node_visible()
+  end)
+end
+
 vim.api.nvim_create_autocmd("TextYankPost", {
   group = group,
   callback = function()
@@ -982,6 +1027,19 @@ vim.api.nvim_create_autocmd({ "BufLeave", "WinLeave" }, {
   group = group,
   pattern = "NvimTree_*",
   callback = hide_nvim_tree_name_popup,
+})
+
+vim.api.nvim_create_autocmd("BufEnter", {
+  group = group,
+  callback = function(args)
+    if args.buf == nil or args.buf == 0 then
+      return
+    end
+
+    vim.schedule(function()
+      sync_visible_nvim_tree_to_buffer(args.buf)
+    end)
+  end,
 })
 
 vim.api.nvim_create_autocmd("FileType", {
