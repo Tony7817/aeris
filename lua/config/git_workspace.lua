@@ -1114,6 +1114,16 @@ end
 
 local function status_preview(item)
   local repo = item.repo
+  if repo == nil then
+    return "Workspace Source Control", {
+      item.status_text or item.status_title or "Status unavailable.",
+    }, table.concat({
+      "status",
+      tostring(item.status_title or ""),
+      tostring(item.status_text or ""),
+    }, "\n")
+  end
+
   local title = (item.status_title or "Status") .. " · " .. repo_title(repo)
   local lines = repo_preview_lines(repo)
   append_preview_section(lines, item.status_title or "Status", split_text_lines(item.status_text or ""))
@@ -1535,7 +1545,10 @@ local function render_repo_block(lines, repo, depth)
     if vim.tbl_isempty(repo.files) and vim.tbl_isempty(repo.submodules or {}) then
       add_sidebar_line(lines, {
         kind = "status",
+        repo = repo,
         highlight = "Comment",
+        status_title = "Status",
+        status_text = "No changes",
       }, repo_content_indent(depth) .. "No changes")
     elseif not vim.tbl_isempty(repo.files) then
       render_repo_files(lines, repo, depth)
