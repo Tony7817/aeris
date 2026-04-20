@@ -1370,11 +1370,16 @@ local function build_diff_view(repo, file, raw_lines)
   local highlights = {}
   local hunks = {}
   local scrollbar_marks = {}
+  local line_map = {}
   local diff_blocks = parse_diff_blocks(raw_lines)
 
-  local function add_line(text, group, scrollbar_type)
+  local function add_line(text, group, scrollbar_type, source_line)
     table.insert(lines, text)
     local line_number = #lines
+
+    if source_line ~= nil then
+      line_map[line_number] = source_line
+    end
 
     if group then
       table.insert(highlights, { line = line_number, group = group })
@@ -1400,6 +1405,7 @@ local function build_diff_view(repo, file, raw_lines)
         highlights = highlights,
         hunks = hunks,
         scrollbar_marks = scrollbar_marks,
+        line_map = line_map,
       }
     end
   end
@@ -1416,6 +1422,7 @@ local function build_diff_view(repo, file, raw_lines)
         highlights = highlights,
         hunks = hunks,
         scrollbar_marks = scrollbar_marks,
+        line_map = line_map,
       }
     end
     current_lines = read_result
@@ -1425,8 +1432,8 @@ local function build_diff_view(repo, file, raw_lines)
     if file.deleted then
       add_line("No textual diff available.", "Comment")
     else
-      for _, line in ipairs(current_lines) do
-        add_line(line)
+      for index, line in ipairs(current_lines) do
+        add_line(line, nil, nil, index)
       end
     end
     return {
@@ -1434,6 +1441,7 @@ local function build_diff_view(repo, file, raw_lines)
       highlights = highlights,
       hunks = hunks,
       scrollbar_marks = scrollbar_marks,
+      line_map = line_map,
     }
   end
 
@@ -1443,25 +1451,27 @@ local function build_diff_view(repo, file, raw_lines)
     local block_start = math.max(block.new_start, 1)
 
     while not file.deleted and current_index < block_start and current_index <= #current_lines do
-      add_line(current_lines[current_index])
+      add_line(current_lines[current_index], nil, nil, current_index)
       current_index = current_index + 1
     end
 
     local hunk_anchor
     for _, op in ipairs(block.ops) do
       if op.kind == "-" then
-        local line_number = add_line(op.text, "DiffDelete", "GitDelete")
+        local source_line = not file.deleted and current_index or nil
+        local line_number = add_line(op.text, "DiffDelete", "GitDelete", source_line)
         hunk_anchor = hunk_anchor or line_number
       elseif op.kind == "+" then
         local text = file.deleted and op.text or (current_lines[current_index] or op.text)
-        local line_number = add_line(text, "DiffAdd", "GitAdd")
+        local source_line = not file.deleted and current_index or nil
+        local line_number = add_line(text, "DiffAdd", "GitAdd", source_line)
         hunk_anchor = hunk_anchor or line_number
         if not file.deleted then
           current_index = current_index + 1
         end
       elseif op.kind == " " then
         local text = file.deleted and op.text or (current_lines[current_index] or op.text)
-        add_line(text)
+        add_line(text, nil, nil, not file.deleted and current_index or nil)
         if not file.deleted then
           current_index = current_index + 1
         end
@@ -1474,7 +1484,7 @@ local function build_diff_view(repo, file, raw_lines)
   end
 
   while not file.deleted and current_index <= #current_lines do
-    add_line(current_lines[current_index])
+    add_line(current_lines[current_index], nil, nil, current_index)
     current_index = current_index + 1
   end
 
@@ -1487,7 +1497,77 @@ local function build_diff_view(repo, file, raw_lines)
     highlights = highlights,
     hunks = hunks,
     scrollbar_marks = scrollbar_marks,
+    line_map = line_map,
   }
+end
+
+local function current_diff_absolute_path(repo, file)
+  if not repo or not file or file.deleted then
+    return nil
+  end
+
+  if not file.path or file.path == "" then
+    return nil
+  end
+
+  return join(repo.path, file.path)
+end
+
+function M.goto_definition()
+  reset_closed_handles()
+
+  if not is_valid_tab(state.tabpage) or api.nvim_get_current_tabpage() ~= state.tabpage then
+    vim.lsp.buf.definition()
+    return
+  end
+
+  local current = state.current_diff
+  if current == nil or not is_valid_buf(current.buf) or not in_git_tab(current.win) then
+    state.current_diff = nil
+    vim.lsp.buf.definition()
+    return
+  end
+
+  if api.nvim_get_current_win() ~= current.win or api.nvim_get_current_buf() ~= current.buf then
+    vim.lsp.buf.definition()
+    return
+  end
+
+  if not current.absolute_path then
+    vim.notify("Cannot jump to definition for this diff entry", vim.log.levels.WARN)
+    return
+  end
+
+  local diff_cursor = api.nvim_win_get_cursor(current.win)
+  local source_line = current.line_map and current.line_map[diff_cursor[1]] or diff_cursor[1]
+  local source_cursor = {
+    math.max(source_line or 1, 1),
+    diff_cursor[2],
+  }
+
+  require("config.diffview_navigation").goto_definition_from({
+    path = current.absolute_path,
+    cursor = source_cursor,
+    return_location = {
+      tabpage = state.tabpage,
+      win = current.win,
+      buf = current.buf,
+      cursor = diff_cursor,
+    },
+  })
+end
+
+local function apply_diff_mappings(buf)
+  local map = function(lhs, rhs, desc)
+    vim.keymap.set("n", lhs, rhs, {
+      buffer = buf,
+      desc = desc,
+      nowait = true,
+      silent = true,
+    })
+  end
+
+  map("gd", M.goto_definition, "Go to definition from Git diff")
 end
 
 local function apply_diff_code_syntax(buf, win, repo, file)
@@ -1679,14 +1759,17 @@ local function open_diff(repo, file)
   )
   api.nvim_win_set_buf(win, buf)
   apply_diff_code_syntax(buf, win, repo, file)
+  apply_diff_mappings(buf)
   configure_main_window(win)
   apply_diff_highlights(buf, diff_view)
   apply_diff_scrollbar_marks(buf, win, diff_view)
 
   state.current_diff = {
+    absolute_path = current_diff_absolute_path(repo, file),
     file_path = file.path,
     buf = buf,
     hunks = diff_view.hunks,
+    line_map = diff_view.line_map,
     win = win,
   }
   api.nvim_set_current_win(win)

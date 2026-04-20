@@ -43,6 +43,19 @@ local function push_return_location(location)
   return_stack[#return_stack + 1] = location
 end
 
+local function previous_non_view_tabpage()
+  local ok, lib = pcall(require, "diffview.lib")
+  if not ok or type(lib.get_current_view) ~= "function" or lib.get_current_view() == nil then
+    return nil
+  end
+
+  if type(lib.get_prev_non_view_tabpage) ~= "function" then
+    return nil
+  end
+
+  return lib.get_prev_non_view_tabpage()
+end
+
 local function restore_return_location(location)
   if not is_valid_tab(location.tabpage) then
     return false
@@ -87,9 +100,8 @@ local function restore_return_location(location)
   return true
 end
 
-local function edit_real_file(path, cursor)
-  local ok, lib = pcall(require, "diffview.lib")
-  local target_tab = ok and lib.get_prev_non_view_tabpage and lib.get_prev_non_view_tabpage() or nil
+local function edit_real_file(path, cursor, target_tab)
+  target_tab = target_tab or previous_non_view_tabpage()
 
   if target_tab ~= nil and is_valid_tab(target_tab) then
     api.nvim_set_current_tabpage(target_tab)
@@ -112,57 +124,88 @@ local function edit_real_file(path, cursor)
   return api.nvim_get_current_buf()
 end
 
-local function when_lsp_ready(bufnr, method, callback)
-  if #vim.lsp.get_clients({ bufnr = bufnr, method = method }) > 0 then
-    callback()
-    return
+local function focus_buffer(bufnr)
+  if not api.nvim_buf_is_valid(bufnr) then
+    return false
   end
 
-  local fired = false
-  local augroup = api.nvim_create_augroup("erwin_diffview_navigation", { clear = false })
-
-  local function try_callback()
-    if fired or not api.nvim_buf_is_valid(bufnr) then
-      return false
-    end
-
-    if #vim.lsp.get_clients({ bufnr = bufnr, method = method }) == 0 then
-      return false
-    end
-
-    fired = true
-    callback()
+  if api.nvim_get_current_buf() == bufnr then
     return true
   end
 
-  local autocmd
-  autocmd = api.nvim_create_autocmd("LspAttach", {
-    group = augroup,
-    buffer = bufnr,
-    callback = function(event)
-      local client = vim.lsp.get_client_by_id(event.data.client_id)
-      if client == nil or not client:supports_method(method, { bufnr = bufnr }) then
-        return
-      end
+  local win = vim.fn.bufwinid(bufnr)
+  if win == -1 or not is_valid_win(win) then
+    return false
+  end
 
-      if try_callback() and autocmd ~= nil then
-        pcall(api.nvim_del_autocmd, autocmd)
-      end
-    end,
-  })
+  api.nvim_set_current_win(win)
+  return true
+end
 
-  vim.defer_fn(function()
-    if try_callback() and autocmd ~= nil then
-      pcall(api.nvim_del_autocmd, autocmd)
+local function when_lsp_ready(bufnr, path, method, callback)
+  local attempts_remaining = 50
+
+  local function resolved_bufnr()
+    if api.nvim_buf_is_valid(bufnr) and api.nvim_buf_get_name(bufnr) == path then
+      return bufnr
+    end
+
+    local current = api.nvim_get_current_buf()
+    if api.nvim_buf_is_valid(current) and api.nvim_buf_get_name(current) == path then
+      return current
+    end
+
+    local matches = vim.fn.bufnr(vim.fn.fnameescape(path))
+    if type(matches) == "number" and matches > 0 and api.nvim_buf_is_valid(matches) then
+      return matches
+    end
+
+    return bufnr
+  end
+
+  local function poll()
+    local ready_buf = resolved_bufnr()
+    if api.nvim_buf_is_valid(ready_buf) and #vim.lsp.get_clients({ bufnr = ready_buf, method = method }) > 0 then
+      callback(ready_buf)
       return
     end
 
-    if autocmd ~= nil then
-      pcall(api.nvim_del_autocmd, autocmd)
+    attempts_remaining = attempts_remaining - 1
+    if attempts_remaining <= 0 then
+      vim.notify("No LSP definition available for this diff entry", vim.log.levels.WARN)
+      return
     end
 
-    vim.notify("No LSP definition available for this diff entry", vim.log.levels.WARN)
-  end, 1000)
+    vim.defer_fn(poll, 100)
+  end
+
+  poll()
+end
+
+function M.goto_definition_from(opts)
+  opts = opts or {}
+
+  local path = opts.path
+  if type(path) ~= "string" or path == "" then
+    vim.lsp.buf.definition()
+    return
+  end
+
+  if vim.fn.filereadable(path) ~= 1 then
+    vim.notify("Cannot jump to definition: source file is not available on disk", vim.log.levels.WARN)
+    return
+  end
+
+  local return_location = opts.return_location
+  if return_location ~= nil then
+    push_return_location(return_location)
+  end
+
+  local bufnr = edit_real_file(path, opts.cursor, opts.target_tab)
+  when_lsp_ready(bufnr, path, "textDocument/definition", function(ready_buf)
+    focus_buffer(ready_buf)
+    vim.lsp.buf.definition()
+  end)
 end
 
 function M.goto_definition()
@@ -172,12 +215,11 @@ function M.goto_definition()
     return
   end
 
-  push_return_location(location)
-
-  local bufnr = edit_real_file(location.path, location.cursor)
-  when_lsp_ready(bufnr, "textDocument/definition", function()
-    vim.lsp.buf.definition()
-  end)
+  M.goto_definition_from({
+    path = location.path,
+    cursor = location.cursor,
+    return_location = location,
+  })
 end
 
 function M.jump_back()
