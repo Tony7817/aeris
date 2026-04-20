@@ -346,13 +346,16 @@ return {
     "lewis6991/gitsigns.nvim",
     event = { "BufReadPre", "BufNewFile" },
     opts = {
+      signcolumn = true,
+      numhl = false,
+      linehl = false,
       signs = {
-        add = { text = "▎" },
-        change = { text = "▎" },
-        delete = { text = "▁" },
+        add = { text = "│" },
+        change = { text = "│" },
+        delete = { text = "▔" },
         topdelete = { text = "▔" },
-        changedelete = { text = "▎" },
-        untracked = { text = "▎" },
+        changedelete = { text = "│" },
+        untracked = { text = "│" },
       },
       current_line_blame = true,
       current_line_blame_opts = {
