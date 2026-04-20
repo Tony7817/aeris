@@ -234,7 +234,7 @@ These mappings are available after an LSP client attaches to the current file.
 | `<F12>` | Prefer implementation, otherwise definition |
 | `gd` | Go to definition |
 | `gr` | Find references |
-| `gI` | Go to implementation |
+| `gi` | Go to implementation |
 | `K` | Hover documentation |
 | `Space ds` | Document symbols |
 | `Space ca` | Code action |
