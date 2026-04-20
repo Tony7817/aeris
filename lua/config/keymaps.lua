@@ -1,12 +1,39 @@
 local map = vim.keymap.set
 
+local function location_state()
+  return {
+    tabpage = vim.api.nvim_get_current_tabpage(),
+    bufnr = vim.api.nvim_get_current_buf(),
+    cursor = vim.api.nvim_win_get_cursor(0),
+  }
+end
+
+local function same_location(a, b)
+  if a == nil or b == nil then
+    return false
+  end
+
+  return a.tabpage == b.tabpage
+    and a.bufnr == b.bufnr
+    and a.cursor[1] == b.cursor[1]
+    and a.cursor[2] == b.cursor[2]
+end
+
 local function jump_back()
+  local before = location_state()
+  vim.cmd("silent! normal! " .. vim.keycode("<C-o>"))
+  local after = location_state()
+
+  if not same_location(before, after) then
+    return
+  end
+
   local ok, code_navigation = pcall(require, "config.code_navigation")
   if ok and code_navigation.jump_back and code_navigation.jump_back() then
     return
   end
 
-  vim.cmd("normal! " .. vim.keycode("<C-o>"))
+  vim.cmd("silent! normal! " .. vim.keycode("<C-o>"))
 end
 
 local function goto_git_change(direction)
