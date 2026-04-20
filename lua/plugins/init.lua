@@ -509,7 +509,8 @@ return {
                 return false
               end
 
-              return pcall(vim.treesitter.get_parser, bufnr, lang)
+              local ok_parser, parser = pcall(vim.treesitter.get_parser, bufnr, lang)
+              return ok_parser and parser ~= nil
             end,
             setup = function(user_modules)
               if type(user_modules) ~= "table" then
