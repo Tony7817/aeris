@@ -2,7 +2,11 @@
 
 [中文文档](./README.zh-CN.md)
 
-Aeris is a modern IDE-style Neovim configuration focused on being usable immediately after cloning.
+Aeris is a modern IDE-style Neovim configuration built around a simple idea:
+
+VS Code is eating your CPU and memory, but in the AI era those resources are better spent on AI tools like Codex and Claude.
+
+Instead of turning the editor itself into the heaviest process on your machine, Aeris keeps the editing environment fast, lean, and keyboard-driven, while leaving more headroom for agent workflows, local language servers, browser automation, and long-running AI sessions.
 
 Goals:
 
@@ -10,6 +14,7 @@ Goals:
 - install plugins automatically on first start
 - install common LSP servers and formatters automatically on first start
 - provide a ready-to-use layout with a file tree, top tabs, terminal panel, and workspace Git panel
+- deliver an IDE-like workflow without paying the resource cost of a heavy IDE
 
 ## Features
 

@@ -2,7 +2,11 @@
 
 [English README](./README.md)
 
-Aeris 是一套偏现代 IDE 工作流的 Neovim 配置，目标是 clone 下来后尽快可用。
+Aeris 是一套偏现代 IDE 工作流的 Neovim 配置，但它背后的主题很明确：
+
+VS Code 正在吞噬你的 CPU 和内存，而在 AI 时代，这些性能更应该留给 Codex、Claude 这类 AI 工具。
+
+Aeris 的目标不是把编辑器本身做成机器里最重的进程，而是在保留 IDE 级工作流体验的同时，让编辑环境保持轻量、响应快、键盘优先，把更多资源留给 agent 工作流、本地语言服务、浏览器自动化和长期运行的 AI 会话。
 
 目标很简单：
 
@@ -10,6 +14,7 @@ Aeris 是一套偏现代 IDE 工作流的 Neovim 配置，目标是 clone 下来
 - 首次启动自动安装插件
 - 首次启动自动安装常用 LSP / formatter
 - 左侧文件树、顶部文件 tab、底部 terminal、工作区 Git 面板开箱即用
+- 提供接近 IDE 的体验，但不承担重型 IDE 的资源代价
 
 ## 特性
 
