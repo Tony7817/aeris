@@ -796,7 +796,7 @@ return {
         end
 
         if client:supports_method("textDocument/inlayHint", bufnr) then
-          pcall(vim.lsp.inlay_hint.enable, true, { bufnr = bufnr })
+          pcall(vim.lsp.inlay_hint.enable, false, { bufnr = bufnr })
         end
       end
 
