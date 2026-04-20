@@ -437,40 +437,6 @@ return {
     end,
   },
   {
-    "nvim-lua/plenary.nvim",
-    lazy = true,
-  },
-  {
-    "sindrets/diffview.nvim",
-    cmd = {
-      "DiffviewOpen",
-      "DiffviewClose",
-      "DiffviewFileHistory",
-      "DiffviewFocusFiles",
-      "DiffviewToggleFiles",
-      "DiffviewRefresh",
-    },
-    dependencies = {
-      "nvim-lua/plenary.nvim",
-    },
-    opts = function()
-      local diffview_navigation = require("config.diffview_navigation")
-
-      return {
-        keymaps = {
-          view = {
-            {
-              "n",
-              "gd",
-              diffview_navigation.goto_definition,
-              { desc = "Go to definition from diff view" },
-            },
-          },
-        },
-      }
-    end,
-  },
-  {
     "nvim-telescope/telescope.nvim",
     branch = "0.1.x",
     cmd = "Telescope",

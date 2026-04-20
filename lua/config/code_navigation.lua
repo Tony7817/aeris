@@ -12,48 +12,8 @@ local function is_valid_win(win)
   return win ~= nil and api.nvim_win_is_valid(win)
 end
 
-local function current_file_context()
-  local ok, lib = pcall(require, "diffview.lib")
-  if not ok then
-    return nil
-  end
-
-  local view = lib.get_current_view()
-  if view == nil or type(view.infer_cur_file) ~= "function" then
-    return nil
-  end
-
-  local ok_file, file = pcall(view.infer_cur_file, view)
-  if not ok_file or file == nil or type(file.absolute_path) ~= "string" or file.absolute_path == "" then
-    return nil
-  end
-
-  local win = api.nvim_get_current_win()
-
-  return {
-    path = file.absolute_path,
-    tabpage = api.nvim_get_current_tabpage(),
-    win = win,
-    buf = api.nvim_get_current_buf(),
-    cursor = api.nvim_win_get_cursor(win),
-  }
-end
-
 local function push_return_location(location)
   return_stack[#return_stack + 1] = location
-end
-
-local function previous_non_view_tabpage()
-  local ok, lib = pcall(require, "diffview.lib")
-  if not ok or type(lib.get_current_view) ~= "function" or lib.get_current_view() == nil then
-    return nil
-  end
-
-  if type(lib.get_prev_non_view_tabpage) ~= "function" then
-    return nil
-  end
-
-  return lib.get_prev_non_view_tabpage()
 end
 
 local function restore_return_location(location)
@@ -100,28 +60,49 @@ local function restore_return_location(location)
   return true
 end
 
-local function edit_real_file(path, cursor, target_tab)
-  target_tab = target_tab or previous_non_view_tabpage()
+local function open_workspace_file(path, cursor, workspace_root)
+  vim.cmd("tabnew")
 
-  if target_tab ~= nil and is_valid_tab(target_tab) then
-    api.nvim_set_current_tabpage(target_tab)
-    vim.cmd("keepalt keepjumps edit " .. vim.fn.fnameescape(path))
-  else
-    vim.cmd("tabnew")
+  local content_win = api.nvim_get_current_win()
+  if workspace_root and workspace_root ~= "" and vim.fn.isdirectory(workspace_root) == 1 then
+    vim.cmd("tcd " .. vim.fn.fnameescape(workspace_root))
+  end
 
-    local temp_buf = api.nvim_get_current_buf()
-    vim.cmd("keepalt keepjumps edit " .. vim.fn.fnameescape(path))
+  vim.cmd("keepalt keepjumps edit " .. vim.fn.fnameescape(path))
 
-    if temp_buf ~= api.nvim_get_current_buf() and api.nvim_buf_is_valid(temp_buf) then
-      pcall(api.nvim_buf_delete, temp_buf, { force = true })
+  local bufnr = api.nvim_get_current_buf()
+  if cursor ~= nil then
+    pcall(api.nvim_win_set_cursor, content_win, cursor)
+  end
+
+  local ok, tree_api = pcall(require, "nvim-tree.api")
+  if ok then
+    vim.cmd("topleft vertical 22new")
+
+    local tree_win = api.nvim_get_current_win()
+    tree_api.tree.open({
+      current_window = true,
+      path = workspace_root and workspace_root ~= "" and workspace_root or vim.fn.getcwd(),
+    })
+    vim.cmd("vertical resize 22")
+
+    if api.nvim_win_is_valid(tree_win) then
+      vim.wo[tree_win].winfixwidth = true
+    end
+
+    tree_api.tree.find_file({
+      buf = bufnr,
+      focus = false,
+      open = false,
+      update_root = true,
+    })
+
+    if api.nvim_win_is_valid(content_win) then
+      api.nvim_set_current_win(content_win)
     end
   end
 
-  if cursor ~= nil then
-    pcall(api.nvim_win_set_cursor, 0, cursor)
-  end
-
-  return api.nvim_get_current_buf()
+  return bufnr
 end
 
 local function focus_buffer(bufnr)
@@ -155,9 +136,9 @@ local function when_lsp_ready(bufnr, path, method, callback)
       return current
     end
 
-    local matches = vim.fn.bufnr(vim.fn.fnameescape(path))
-    if type(matches) == "number" and matches > 0 and api.nvim_buf_is_valid(matches) then
-      return matches
+    local match = vim.fn.bufnr(vim.fn.fnameescape(path))
+    if type(match) == "number" and match > 0 and api.nvim_buf_is_valid(match) then
+      return match
     end
 
     return bufnr
@@ -172,7 +153,7 @@ local function when_lsp_ready(bufnr, path, method, callback)
 
     attempts_remaining = attempts_remaining - 1
     if attempts_remaining <= 0 then
-      vim.notify("No LSP definition available for this diff entry", vim.log.levels.WARN)
+      vim.notify("No LSP definition available for this entry", vim.log.levels.WARN)
       return
     end
 
@@ -196,30 +177,15 @@ function M.goto_definition_from(opts)
     return
   end
 
-  local return_location = opts.return_location
-  if return_location ~= nil then
-    push_return_location(return_location)
+  if opts.return_location ~= nil then
+    push_return_location(opts.return_location)
   end
 
-  local bufnr = edit_real_file(path, opts.cursor, opts.target_tab)
+  local bufnr = open_workspace_file(path, opts.cursor, opts.workspace_root)
   when_lsp_ready(bufnr, path, "textDocument/definition", function(ready_buf)
     focus_buffer(ready_buf)
     vim.lsp.buf.definition()
   end)
-end
-
-function M.goto_definition()
-  local location = current_file_context()
-  if location == nil then
-    vim.lsp.buf.definition()
-    return
-  end
-
-  M.goto_definition_from({
-    path = location.path,
-    cursor = location.cursor,
-    return_location = location,
-  })
 end
 
 function M.jump_back()

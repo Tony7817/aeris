@@ -1545,9 +1545,10 @@ function M.goto_definition()
     diff_cursor[2],
   }
 
-  require("config.diffview_navigation").goto_definition_from({
+  require("config.code_navigation").goto_definition_from({
     path = current.absolute_path,
     cursor = source_cursor,
+    workspace_root = current.repo_path,
     return_location = {
       tabpage = state.tabpage,
       win = current.win,
@@ -1770,6 +1771,7 @@ local function open_diff(repo, file)
     buf = buf,
     hunks = diff_view.hunks,
     line_map = diff_view.line_map,
+    repo_path = repo.path,
     win = win,
   }
   api.nvim_set_current_win(win)

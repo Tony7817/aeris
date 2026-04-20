@@ -1,8 +1,8 @@
 local map = vim.keymap.set
 
 local function jump_back()
-  local ok, diffview_navigation = pcall(require, "config.diffview_navigation")
-  if ok and diffview_navigation.jump_back and diffview_navigation.jump_back() then
+  local ok, code_navigation = pcall(require, "config.code_navigation")
+  if ok and code_navigation.jump_back and code_navigation.jump_back() then
     return
   end
 
@@ -98,17 +98,8 @@ map("n", "<leader>E", "<cmd>NvimTreeFocus<CR>", { desc = "Focus file tree" })
 map("n", "<Tab>", "<cmd>BufferLineCycleNext<CR>", { desc = "Next buffer tab" })
 map("n", "<S-Tab>", "<cmd>BufferLineCyclePrev<CR>", { desc = "Previous buffer tab" })
 map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Close buffer" })
-map("n", "<leader>gd", "<cmd>DiffviewOpen<CR>", { desc = "Open diff view" })
-map("n", "<leader>gh", "<cmd>DiffviewFileHistory %<CR>", { desc = "Current file history" })
-map("n", "<leader>gq", "<cmd>DiffviewClose<CR>", { desc = "Close diff view" })
 map("n", "<leader>gx", function()
-  local ok, git_workspace = pcall(require, "config.git_workspace")
-  if ok and git_workspace and git_workspace.close then
-    git_workspace.close()
-    return
-  end
-
-  vim.cmd("DiffviewClose")
+  require("config.git_workspace").close()
 end, { desc = "Exit Git workspace" })
 map("n", "<leader>gw", function()
   require("config.git_workspace").open()
