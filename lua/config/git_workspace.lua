@@ -2655,6 +2655,36 @@ local function apply_diff_scrollbar_marks(buf, win, diff_view)
   end
 end
 
+local function clamped_buf_line(buf, line)
+  if not is_valid_buf(buf) then
+    return 1
+  end
+
+  local max_line = math.max(api.nvim_buf_line_count(buf), 1)
+  line = math.floor(tonumber(line) or 1)
+  return math.min(math.max(line, 1), max_line)
+end
+
+local function sanitize_diff_hunks(buf, hunks)
+  if type(hunks) ~= "table" then
+    return {}
+  end
+
+  local sanitized = {}
+  local seen = {}
+
+  for _, line in ipairs(hunks) do
+    local clamped = clamped_buf_line(buf, line)
+    if not seen[clamped] then
+      sanitized[#sanitized + 1] = clamped
+      seen[clamped] = true
+    end
+  end
+
+  table.sort(sanitized)
+  return sanitized
+end
+
 local function jump_to_hunk(win, hunks, direction)
   if not is_valid_win(win) or #hunks == 0 then
     return false
@@ -2685,6 +2715,7 @@ local function jump_to_hunk(win, hunks, direction)
   end
 
   api.nvim_set_current_win(win)
+  target = clamped_buf_line(api.nvim_win_get_buf(win), target)
   api.nvim_win_set_cursor(win, { target, 0 })
   window_call(win, function()
     vim.cmd("normal! zz")
@@ -2753,26 +2784,28 @@ local function open_diff(repo, file)
     nil,
     false
   )
+  local sanitized_hunks = sanitize_diff_hunks(buf, diff_view.hunks)
+
+  state.current_diff = {
+    absolute_path = current_diff_absolute_path(repo, file),
+    file_path = file.path,
+    buf = buf,
+    hunks = sanitized_hunks,
+    line_map = diff_view.line_map,
+    repo_path = repo.path,
+    win = win,
+  }
+  state.preview_signature = nil
+
   api.nvim_win_set_buf(win, buf)
   apply_diff_code_syntax(buf, win, repo, file)
   apply_diff_mappings(buf)
   configure_main_window(win)
   apply_diff_highlights(buf, diff_view)
   apply_diff_scrollbar_marks(buf, win, diff_view)
-
-  state.current_diff = {
-    absolute_path = current_diff_absolute_path(repo, file),
-    file_path = file.path,
-    buf = buf,
-    hunks = diff_view.hunks,
-    line_map = diff_view.line_map,
-    repo_path = repo.path,
-    win = win,
-  }
-  state.preview_signature = nil
   api.nvim_set_current_win(win)
-  if diff_view.hunks and diff_view.hunks[1] then
-    api.nvim_win_set_cursor(win, { diff_view.hunks[1], 0 })
+  if sanitized_hunks[1] then
+    api.nvim_win_set_cursor(win, { sanitized_hunks[1], 0 })
     window_call(win, function()
       vim.cmd("normal! zz")
     end)
