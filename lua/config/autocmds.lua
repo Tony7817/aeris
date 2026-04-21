@@ -1087,7 +1087,6 @@ local function sync_visible_nvim_tree_to_buffer(bufnr)
       local topline = math.max(cursor[1] - math.floor(height / 2), 1)
       vim.fn.winrestview({ topline = topline })
       keep_nvim_tree_node_visible()
-      show_nvim_tree_name_popup()
     end)
   end
 
@@ -1284,7 +1283,7 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
-vim.api.nvim_create_autocmd({ "BufWinEnter", "CursorMoved" }, {
+vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter", "WinEnter", "CursorMoved" }, {
   group = group,
   pattern = "NvimTree_*",
   callback = function()
