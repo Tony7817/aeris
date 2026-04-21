@@ -215,6 +215,15 @@ That means:
 | `Space tl` | Focus / toggle terminal list |
 | `Esc Esc` | Leave terminal insert mode |
 
+### Markdown
+
+| Key | Action |
+| --- | --- |
+| `Space mr` | Toggle in-buffer Markdown render |
+| `Space mp` | Open browser Markdown preview |
+| `Space ms` | Stop browser Markdown preview |
+| `Space mt` | Toggle browser Markdown preview |
+
 ### Git
 
 | Key | Action |
@@ -270,6 +279,7 @@ These mappings are available after an LSP client attaches to the current file.
     │   ├── git_workspace.lua
     │   ├── keymaps.lua
     │   ├── lazy.lua
+    │   ├── markdown_render.lua
     │   ├── options.lua
     │   ├── references.lua
     │   └── terminals.lua
@@ -298,3 +308,4 @@ If `sourcekit-lsp` is available on the system, Swift is also enabled automatical
 - Plugin versions are locked in `lazy-lock.json`
 - This repository has its own `AGENTS.md`
 - By repository rule, every change must be committed
+- Markdown files open as plain text by default; use `Space mr` to enter read-only render mode

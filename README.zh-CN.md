@@ -213,6 +213,15 @@ Ctrl-o
 | `Space tl` | 聚焦 / 切换 terminal 列表 |
 | `Esc Esc` | terminal 回到 Normal 模式 |
 
+### Markdown
+
+| 快捷键 | 作用 |
+| --- | --- |
+| `Space mr` | 切换当前 buffer 的 Markdown 渲染 |
+| `Space mp` | 打开浏览器 Markdown 预览 |
+| `Space ms` | 停止浏览器 Markdown 预览 |
+| `Space mt` | 切换浏览器 Markdown 预览 |
+
 ### Git
 
 | 快捷键 | 作用 |
@@ -268,6 +277,7 @@ Ctrl-o
     │   ├── git_workspace.lua
     │   ├── keymaps.lua
     │   ├── lazy.lua
+    │   ├── markdown_render.lua
     │   ├── options.lua
     │   ├── references.lua
     │   └── terminals.lua
@@ -296,3 +306,4 @@ Ctrl-o
 - 插件版本锁在 `lazy-lock.json`
 - 这个仓库有自己的 `AGENTS.md`
 - 按仓库规则，修改后必须提交一个 git commit
+- Markdown 文件默认以纯文本打开；用 `Space mr` 进入只读渲染视图

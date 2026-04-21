@@ -109,6 +109,7 @@ return {
       "nvim-tree/nvim-web-devicons",
     },
     opts = {
+      enabled = false,
       file_types = { "markdown" },
       render_modes = { "n", "c", "t" },
       completions = {

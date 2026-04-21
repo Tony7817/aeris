@@ -228,6 +228,9 @@ end, { desc = "Find diagnostics" })
 map("n", "<leader>mp", "<cmd>MarkdownPreview<CR>", { desc = "Markdown preview" })
 map("n", "<leader>ms", "<cmd>MarkdownPreviewStop<CR>", { desc = "Stop Markdown preview" })
 map("n", "<leader>mt", "<cmd>MarkdownPreviewToggle<CR>", { desc = "Toggle Markdown preview" })
+map("n", "<leader>mr", function()
+  require("config.markdown_render").toggle()
+end, { desc = "Toggle Markdown render" })
 
 for index = 1, 9 do
   map("n", "<leader>" .. index, function()

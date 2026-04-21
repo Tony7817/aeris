@@ -1276,6 +1276,14 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
+vim.api.nvim_create_autocmd("FileType", {
+  group = group,
+  pattern = "markdown",
+  callback = function(args)
+    require("config.markdown_render").reset(args.buf)
+  end,
+})
+
 vim.api.nvim_create_autocmd({ "BufWinEnter", "CursorMoved" }, {
   group = group,
   pattern = "NvimTree_*",
