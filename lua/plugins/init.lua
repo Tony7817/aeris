@@ -265,6 +265,9 @@ return {
           quit_on_open = false,
           resize_window = false,
         },
+        remove_file = {
+          close_window = false,
+        },
       },
       filters = {
         dotfiles = false,
