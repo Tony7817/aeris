@@ -4,6 +4,9 @@ local nvim_tree_name_popup = {
   win = nil,
 }
 local workspace_state_path = vim.fn.stdpath("state") .. "/erwin-workspace-files.json"
+local workspace_placeholder_namespace = vim.api.nvim_create_namespace("erwin_workspace_placeholder")
+local nvim_tree_delete_handler_attached = false
+local ensure_buffer_highlighting
 
 local function normalize_path(path)
   if path == nil or path == "" then
@@ -13,14 +16,24 @@ local function normalize_path(path)
   return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
 end
 
+local function canonical_path(path)
+  path = normalize_path(path)
+  if path == nil then
+    return nil
+  end
+
+  local realpath = vim.uv.fs_realpath(path)
+  return realpath and vim.fs.normalize(realpath) or path
+end
+
 local function is_real_file(path)
   path = normalize_path(path)
   return path ~= nil and vim.fn.filereadable(path) == 1 and vim.fn.isdirectory(path) == 0
 end
 
 local function is_path_in_cwd(path, cwd)
-  path = normalize_path(path)
-  cwd = normalize_path(cwd)
+  path = canonical_path(path)
+  cwd = canonical_path(cwd)
 
   if path == nil or cwd == nil then
     return false
@@ -328,8 +341,204 @@ local function restore_workspace_cursor(win, bufnr, cursor)
   pcall(vim.api.nvim_win_set_cursor, win, { line, col })
 end
 
+local function workspace_placeholder_lines(cwd)
+  cwd = normalize_path(cwd or vim.fn.getcwd())
+  local workspace = cwd and vim.fs.basename(cwd) or ""
+  if workspace == "" then
+    workspace = cwd or "workspace"
+  end
+
+  return {
+    " Workspace",
+    "",
+    " " .. workspace,
+    "",
+    " Press <Space>ff to find files",
+    " Press <Space>e to toggle the file tree",
+    " Press <CR> on a file in the tree to open it",
+  }
+end
+
+local function apply_workspace_placeholder(bufnr, cwd)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  if vim.api.nvim_buf_get_name(bufnr) ~= "" then
+    return
+  end
+
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].buflisted = false
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].modifiable = true
+  vim.bo[bufnr].readonly = false
+  vim.bo[bufnr].filetype = "erwin-workspace-home"
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, workspace_placeholder_lines(cwd))
+  vim.api.nvim_buf_clear_namespace(bufnr, workspace_placeholder_namespace, 0, -1)
+  vim.api.nvim_buf_add_highlight(bufnr, workspace_placeholder_namespace, "Title", 0, 1, -1)
+  for line = 4, 6 do
+    vim.api.nvim_buf_add_highlight(bufnr, workspace_placeholder_namespace, "Comment", line, 0, -1)
+  end
+  vim.bo[bufnr].modifiable = false
+  vim.bo[bufnr].readonly = true
+  vim.bo[bufnr].modified = false
+end
+
+local function show_workspace_placeholder(win, cwd)
+  if not vim.api.nvim_win_is_valid(win) then
+    return nil
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(win, buf)
+  apply_workspace_placeholder(buf, cwd)
+  return buf
+end
+
+local function window_cwd(win)
+  local cwd
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_call(win, function()
+      cwd = canonical_path(vim.fn.getcwd())
+    end)
+  end
+  return cwd or canonical_path(vim.fn.getcwd())
+end
+
+local function workspace_file_path(bufnr, cwd, excluded_path)
+  if type(bufnr) ~= "number" or bufnr < 1 or not vim.api.nvim_buf_is_valid(bufnr) then
+    return nil
+  end
+
+  if vim.bo[bufnr].buftype ~= "" then
+    return nil
+  end
+
+  local path = canonical_path(vim.api.nvim_buf_get_name(bufnr))
+  if not is_real_file(path) then
+    return nil
+  end
+
+  excluded_path = canonical_path(excluded_path)
+  if excluded_path ~= nil and path == excluded_path then
+    return nil
+  end
+
+  if cwd ~= nil and not is_path_in_cwd(path, cwd) then
+    return nil
+  end
+
+  return path
+end
+
+local function find_buffer_by_path(path)
+  local target = canonical_path(path)
+  if target == nil then
+    return nil
+  end
+
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and canonical_path(vim.api.nvim_buf_get_name(bufnr)) == target then
+      return bufnr
+    end
+  end
+
+  return nil
+end
+
+local function previous_workspace_buffer(win, deleted_path)
+  local cwd = window_cwd(win)
+
+  local function usable(bufnr)
+    return workspace_file_path(bufnr, cwd, deleted_path) ~= nil
+  end
+
+  local alternate = 0
+  if vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_call(win, function()
+      alternate = vim.fn.bufnr("#")
+    end)
+  end
+
+  if usable(alternate) then
+    return alternate, cwd
+  end
+
+  local buffers = vim.fn.getbufinfo({ buflisted = 1 })
+  table.sort(buffers, function(a, b)
+    return (a.lastused or 0) > (b.lastused or 0)
+  end)
+
+  for _, info in ipairs(buffers) do
+    if usable(info.bufnr) then
+      return info.bufnr, cwd
+    end
+  end
+
+  return nil, cwd
+end
+
+local function switch_window_to_workspace_target(win, bufnr, cwd)
+  if not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  if type(bufnr) == "number" and bufnr > 0 and vim.api.nvim_buf_is_valid(bufnr) then
+    local ok = pcall(vim.api.nvim_win_call, win, function()
+      vim.cmd("silent buffer " .. bufnr)
+    end)
+    if ok then
+      ensure_buffer_highlighting(bufnr)
+      return
+    end
+  end
+
+  show_workspace_placeholder(win, cwd)
+end
+
+local function prepare_windows_for_deleted_file(path)
+  path = canonical_path(path)
+  if path == nil then
+    return
+  end
+
+  local bufnr = find_buffer_by_path(path)
+  if type(bufnr) ~= "number" or bufnr < 1 or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
+      local filetype = vim.bo[bufnr].filetype
+      if filetype ~= "NvimTree" then
+        local replacement, cwd = previous_workspace_buffer(win, path)
+        switch_window_to_workspace_target(win, replacement, cwd)
+      end
+    end
+  end
+end
+
+local function attach_nvim_tree_delete_handler()
+  if nvim_tree_delete_handler_attached then
+    return
+  end
+
+  local ok, tree_api = pcall(require, "nvim-tree.api")
+  if not ok then
+    return
+  end
+
+  tree_api.events.subscribe(tree_api.events.Event.WillRemoveFile, function(payload)
+    prepare_windows_for_deleted_file(payload and payload.fname)
+  end)
+
+  nvim_tree_delete_handler_attached = true
+end
+
 local function try_restore_workspace_file(win, file)
-  file = normalize_path(file)
+  file = canonical_path(file)
   if file == nil or not vim.api.nvim_win_is_valid(win) then
     return false, nil, nil
   end
@@ -339,7 +548,7 @@ local function try_restore_workspace_file(win, file)
   local ok, err = pcall(vim.cmd, "silent edit " .. vim.fn.fnameescape(file))
   if ok then
     local bufnr = vim.api.nvim_win_get_buf(win)
-    if normalize_path(vim.api.nvim_buf_get_name(bufnr)) == file then
+    if canonical_path(vim.api.nvim_buf_get_name(bufnr)) == file then
       return true, bufnr, nil
     end
 
@@ -354,7 +563,7 @@ local function try_restore_workspace_file(win, file)
   return false, nil, message
 end
 
-local function ensure_buffer_highlighting(bufnr)
+ensure_buffer_highlighting = function(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) or vim.bo[bufnr].buftype ~= "" then
     return
   end
@@ -924,20 +1133,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
     if not ok then
       return
     end
-
-    local function mark_as_workspace_placeholder(bufnr)
-      if not vim.api.nvim_buf_is_valid(bufnr) then
-        return
-      end
-
-      if vim.api.nvim_buf_get_name(bufnr) ~= "" then
-        return
-      end
-
-      vim.bo[bufnr].bufhidden = "wipe"
-      vim.bo[bufnr].buflisted = false
-      vim.bo[bufnr].swapfile = false
-    end
+    attach_nvim_tree_delete_handler()
 
     local path = args.file ~= "" and vim.fn.fnamemodify(args.file, ":p") or ""
     local is_directory = path ~= "" and vim.fn.isdirectory(path) == 1
@@ -953,7 +1149,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
     local content_buf = vim.api.nvim_get_current_buf()
 
     if not has_args or is_directory then
-      mark_as_workspace_placeholder(content_buf)
+      apply_workspace_placeholder(content_buf, vim.fn.getcwd())
     end
 
     local workspace_entry = nil
@@ -971,7 +1167,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
         else
           workspace_restore_error = err
           workspace_entry = nil
-          mark_as_workspace_placeholder(content_buf)
+          apply_workspace_placeholder(content_buf, vim.fn.getcwd())
         end
       end
     end
@@ -1084,6 +1280,7 @@ vim.api.nvim_create_autocmd({ "BufWinEnter", "CursorMoved" }, {
   group = group,
   pattern = "NvimTree_*",
   callback = function()
+    attach_nvim_tree_delete_handler()
     keep_nvim_tree_node_visible()
     show_nvim_tree_name_popup()
   end,
