@@ -21,6 +21,24 @@ local function telescope_path_visible()
   return telescope_selected_path() ~= ""
 end
 
+local function git_workspace_selected_path()
+  local path = vim.g.aeris_git_workspace_status_path
+  local tabpage = vim.g.aeris_git_workspace_status_tab
+  if type(path) ~= "string" or path == "" then
+    return ""
+  end
+
+  if tabpage ~= vim.api.nvim_get_current_tabpage() then
+    return ""
+  end
+
+  return path
+end
+
+local function git_workspace_path_visible()
+  return git_workspace_selected_path() ~= ""
+end
+
 local function shorten_blame_summary(summary, max_chars)
   summary = vim.trim(summary or "")
   if summary == "" then
@@ -169,6 +187,10 @@ return {
         lualine_a = { "mode" },
         lualine_b = {
           workspace_name,
+          {
+            git_workspace_selected_path,
+            cond = git_workspace_path_visible,
+          },
           "branch",
         },
         lualine_c = {

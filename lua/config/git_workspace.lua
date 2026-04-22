@@ -46,6 +46,7 @@ local run_system_async
 local queue_status_check
 local start_next_status_check
 local queue_status_checks
+local set_git_workspace_status_path
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -101,6 +102,7 @@ local function reset_closed_handles()
     state.main_win = nil
     state.current_diff = nil
     state.repo_snapshot = nil
+    set_git_workspace_status_path("")
     stop_refresh_timer()
     reset_status_check_queue()
     reset_remote_check_queue()
@@ -435,6 +437,29 @@ end
 
 local function reset_repo_action_state(repo_path)
   state.repo_actions[repo_path] = {}
+end
+
+local function refresh_lualine_statusline()
+  local ok, lualine = pcall(require, "lualine")
+  if ok then
+    lualine.refresh({
+      place = { "statusline" },
+      scope = "all",
+    })
+  end
+end
+
+set_git_workspace_status_path = function(path)
+  path = type(path) == "string" and path or ""
+  local tabpage = is_valid_tab(state.tabpage) and state.tabpage or nil
+
+  if vim.g.aeris_git_workspace_status_path == path and vim.g.aeris_git_workspace_status_tab == tabpage then
+    return
+  end
+
+  vim.g.aeris_git_workspace_status_path = path
+  vim.g.aeris_git_workspace_status_tab = tabpage
+  refresh_lualine_statusline()
 end
 
 local function set_sidebar_focus(repo_path, target)
@@ -1592,24 +1617,6 @@ local function ensure_sidebar_buf()
   return buf
 end
 
-local function ensure_sidebar_status_buf()
-  if is_valid_buf(state.sidebar_status_buf) then
-    return state.sidebar_status_buf
-  end
-
-  local buf = api.nvim_create_buf(false, true)
-  state.sidebar_status_buf = buf
-
-  vim.bo[buf].bufhidden = "hide"
-  vim.bo[buf].buflisted = false
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].filetype = "erwin-git-workspace-status"
-  vim.bo[buf].swapfile = false
-  vim.bo[buf].modifiable = false
-
-  return buf
-end
-
 local function configure_sidebar_window(win)
   vim.wo[win].cursorline = true
   vim.wo[win].number = false
@@ -1623,18 +1630,13 @@ local function configure_sidebar_window(win)
     "Normal:Normal,NormalNC:Normal,EndOfBuffer:Normal,WinSeparator:WinSeparator,CursorLine:Visual"
 end
 
-local function configure_sidebar_status_window(win)
-  vim.wo[win].cursorline = false
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = "no"
-  vim.wo[win].spell = false
-  vim.wo[win].winfixheight = true
-  vim.wo[win].wrap = true
-  vim.wo[win].linebreak = true
-  vim.wo[win].statusline = ""
-  vim.wo[win].winhighlight =
-    "Normal:StatusLine,NormalNC:StatusLineNC,EndOfBuffer:StatusLine,WinSeparator:WinSeparator"
+local function close_sidebar_status_window()
+  if is_valid_win(state.sidebar_status_win) then
+    pcall(api.nvim_win_close, state.sidebar_status_win, true)
+  end
+
+  state.sidebar_status_win = nil
+  state.sidebar_status_buf = nil
 end
 
 local function attach_sidebar()
@@ -1666,23 +1668,19 @@ current_sidebar_item = function()
   return state.line_items[line]
 end
 
-local function sidebar_status_lines()
-  local item = current_sidebar_item()
-  if item and item.kind == "file" and item.file and item.file.path then
-    return { " Path: " .. item.file.path }
-  end
-
-  return { " Path: " }
-end
-
 render_sidebar_status = function()
-  if not is_valid_buf(state.sidebar_status_buf) then
+  if not is_valid_tab(state.tabpage) then
+    set_git_workspace_status_path("")
     return
   end
 
-  vim.bo[state.sidebar_status_buf].modifiable = true
-  api.nvim_buf_set_lines(state.sidebar_status_buf, 0, -1, false, sidebar_status_lines())
-  vim.bo[state.sidebar_status_buf].modifiable = false
+  local item = current_sidebar_item()
+  if item and item.kind == "file" and item.file and item.file.path then
+    set_git_workspace_status_path(item.file.path)
+    return
+  end
+
+  set_git_workspace_status_path("")
 end
 
 render_sidebar_preview = function()
@@ -1734,25 +1732,6 @@ render_sidebar_preview = function()
   configure_main_window(win)
   api.nvim_buf_clear_namespace(buf, diff_namespace, 0, -1)
   api.nvim_buf_add_highlight(buf, diff_namespace, "Title", 0, 0, -1)
-end
-
-local function attach_sidebar_status()
-  local buf = ensure_sidebar_status_buf()
-
-  if is_valid_win(state.sidebar_status_win) then
-    api.nvim_win_set_buf(state.sidebar_status_win, buf)
-    render_sidebar_status()
-    return
-  end
-
-  state.sidebar_status_win = api.nvim_open_win(buf, false, {
-    split = "below",
-    win = state.sidebar_win,
-    height = 2,
-  })
-
-  configure_sidebar_status_window(state.sidebar_status_win)
-  render_sidebar_status()
 end
 
 local function add_sidebar_line(lines, item, text)
@@ -3033,6 +3012,7 @@ function M.close()
   state.repo_snapshot = nil
   state.preview_buf = nil
   state.preview_signature = nil
+  set_git_workspace_status_path("")
   stop_refresh_timer()
   reset_status_check_queue()
   reset_remote_check_queue()
@@ -3051,7 +3031,8 @@ local function ensure_layout()
 
   if is_valid_tab(state.tabpage) then
     api.nvim_set_current_tabpage(state.tabpage)
-    if is_valid_win(state.sidebar_win) and is_valid_win(state.sidebar_status_win) then
+    close_sidebar_status_window()
+    if is_valid_win(state.sidebar_win) then
       focus_sidebar()
       M.render()
       return
@@ -3069,7 +3050,7 @@ local function ensure_layout()
   configure_main_window(state.main_win)
 
   attach_sidebar()
-  attach_sidebar_status()
+  close_sidebar_status_window()
   M.render()
   focus_sidebar()
 end
