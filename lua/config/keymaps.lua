@@ -60,6 +60,16 @@ local function goto_git_change(direction)
   gitsigns.nav_hunk(direction, { target = "all" })
 end
 
+local function goto_git_conflict(direction)
+  local ok_workspace, git_workspace = pcall(require, "config.git_workspace")
+  if ok_workspace and git_workspace.jump_conflict and git_workspace.jump_conflict(direction) then
+    return
+  end
+
+  local command = direction == "next" and "]x" or "[x"
+  vim.cmd("normal! " .. command)
+end
+
 local function refresh_lualine_statusline()
   local ok, lualine = pcall(require, "lualine")
   if ok then
@@ -260,3 +270,9 @@ end, { desc = "Next Git change" })
 map("n", "[h", function()
   goto_git_change("prev")
 end, { desc = "Previous Git change" })
+map("n", "]x", function()
+  goto_git_conflict("next")
+end, { desc = "Next Git conflict" })
+map("n", "[x", function()
+  goto_git_conflict("prev")
+end, { desc = "Previous Git conflict" })

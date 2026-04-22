@@ -9,9 +9,12 @@ local state = {
   sidebar_win = nil,
   sidebar_status_buf = nil,
   sidebar_status_win = nil,
+  conflict_buf = nil,
+  conflict_win = nil,
   main_win = nil,
   current_diff = nil,
   line_items = {},
+  conflict_line_items = {},
   repo_expanded = {},
   repo_actions = {},
   repo_cache = {},
@@ -28,6 +31,9 @@ local state = {
   remote_check_queue = {},
   remote_check_active = false,
   sidebar_preview_suspended = false,
+  conflict_preview_suspended = false,
+  repos = {},
+  conflict_width = 34,
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
@@ -37,9 +43,11 @@ local configure_main_window
 local current_branch
 local configured_remote
 local current_sidebar_item
+local current_conflict_item
 local open_diff
 local render_sidebar_status
 local render_sidebar_preview
+local render_conflict_sidebar
 local repo_entry
 local diff_status_summary
 local run_system_async
@@ -99,9 +107,11 @@ local function reset_closed_handles()
     state.tabpage = nil
     state.sidebar_win = nil
     state.sidebar_status_win = nil
+    state.conflict_win = nil
     state.main_win = nil
     state.current_diff = nil
     state.repo_snapshot = nil
+    state.repos = {}
     set_git_workspace_status_path("")
     stop_refresh_timer()
     reset_status_check_queue()
@@ -113,6 +123,9 @@ local function reset_closed_handles()
   end
   if not is_valid_win(state.sidebar_status_win) then
     state.sidebar_status_win = nil
+  end
+  if not is_valid_win(state.conflict_win) then
+    state.conflict_win = nil
   end
   if not in_git_tab(state.main_win) then
     state.main_win = nil
@@ -128,6 +141,10 @@ local function reset_closed_handles()
   end
   if not is_valid_buf(state.sidebar_status_buf) then
     state.sidebar_status_buf = nil
+  end
+  if not is_valid_buf(state.conflict_buf) then
+    state.conflict_buf = nil
+    state.conflict_line_items = {}
   end
   if not is_valid_buf(state.preview_buf) then
     state.preview_buf = nil
@@ -147,7 +164,7 @@ local function main_wins()
   local wins = {}
 
   for _, win in ipairs(tab_wins()) do
-    if win ~= state.sidebar_win and win ~= state.sidebar_status_win then
+    if win ~= state.sidebar_win and win ~= state.sidebar_status_win and win ~= state.conflict_win then
       table.insert(wins, win)
     end
   end
@@ -411,6 +428,31 @@ end
 
 local function repo_should_show_publish_action(repo)
   return repo_has_worktree_changes(repo) or repo_has_pending_push(repo)
+end
+
+local function repo_conflict_files(repo)
+  local files = {}
+  for _, file in ipairs(repo.files or {}) do
+    if file.conflicted then
+      files[#files + 1] = file
+    end
+  end
+  return files
+end
+
+local function find_repo_by_path(repos, repo_path)
+  for _, repo in ipairs(repos or {}) do
+    if repo.path == repo_path then
+      return repo
+    end
+
+    local submodule = find_repo_by_path(repo.submodules, repo_path)
+    if submodule then
+      return submodule
+    end
+  end
+
+  return nil
 end
 
 local function preview_signature_bits(repo)
@@ -1213,6 +1255,36 @@ local function adjacent_file_item(current, direction)
   return nil, nil
 end
 
+local function ordered_conflict_sidebar_items()
+  local items = {}
+
+  for _, entry in ipairs(ordered_file_sidebar_items()) do
+    if entry.item and entry.item.file and entry.item.file.conflicted then
+      items[#items + 1] = entry
+    end
+  end
+
+  return items
+end
+
+local function adjacent_conflict_item(current, direction)
+  local items = ordered_conflict_sidebar_items()
+  local step = direction == "prev" and -1 or 1
+
+  for index, entry in ipairs(items) do
+    local item = entry.item
+    if item.repo and item.file and item.repo.path == current.repo_path and item.file.path == current.file_path then
+      local target = items[index + step]
+      if target then
+        return target.item, target.line
+      end
+      break
+    end
+  end
+
+  return nil, nil
+end
+
 local function focus_sidebar()
   reset_closed_handles()
 
@@ -1572,6 +1644,7 @@ local function ensure_sidebar_buf()
       end
       render_sidebar_status()
       render_sidebar_preview()
+      render_conflict_sidebar()
     end,
   })
 
@@ -1589,6 +1662,133 @@ local function configure_sidebar_window(win)
   vim.wo[win].winblend = 0
   vim.wo[win].winhighlight =
     "Normal:Normal,NormalNC:Normal,EndOfBuffer:Normal,WinSeparator:WinSeparator,CursorLine:Visual"
+end
+
+local function conflict_repo_for_context()
+  if is_valid_win(state.conflict_win) and api.nvim_get_current_win() == state.conflict_win then
+    local item = current_conflict_item and current_conflict_item() or nil
+    if item and item.repo then
+      return find_repo_by_path(state.repos, item.repo.path) or item.repo
+    end
+  end
+
+  local sidebar_item = current_sidebar_item and current_sidebar_item() or nil
+  if sidebar_item and sidebar_item.repo then
+    return find_repo_by_path(state.repos, sidebar_item.repo.path) or sidebar_item.repo
+  end
+
+  if state.current_diff and state.current_diff.repo_path then
+    return find_repo_by_path(state.repos, state.current_diff.repo_path)
+  end
+
+  return state.repos[1]
+end
+
+local function configure_conflict_window(win)
+  vim.wo[win].cursorline = true
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].spell = false
+  vim.wo[win].winfixwidth = true
+  vim.wo[win].wrap = false
+  vim.wo[win].winblend = 0
+  vim.wo[win].winhighlight =
+    "Normal:Normal,NormalNC:Normal,EndOfBuffer:Normal,WinSeparator:WinSeparator,CursorLine:Visual"
+end
+
+local function open_conflict_selection(opts)
+  opts = opts or {}
+  local item = current_conflict_item and current_conflict_item() or nil
+  if not item or not item.repo or not item.file then
+    return false
+  end
+
+  if open_diff(item.repo, item.file, {
+    preserve_focus = opts.preserve_focus ~= false,
+    cursor = "first",
+  }) then
+    sync_sidebar_file_selection(item.repo.path, item.file.path)
+    return true
+  end
+
+  return false
+end
+
+local function apply_conflict_mappings(buf)
+  local map = function(lhs, rhs, desc)
+    vim.keymap.set("n", lhs, rhs, {
+      buffer = buf,
+      desc = desc,
+      nowait = true,
+      silent = true,
+    })
+  end
+
+  map("<CR>", function()
+    open_conflict_selection({ preserve_focus = false })
+  end, "Open selected conflict")
+  map("o", function()
+    open_conflict_selection({ preserve_focus = false })
+  end, "Open selected conflict")
+  map("q", M.close, "Close Git tab")
+end
+
+local function ensure_conflict_buf()
+  if is_valid_buf(state.conflict_buf) then
+    return state.conflict_buf
+  end
+
+  local buf = api.nvim_create_buf(false, true)
+  state.conflict_buf = buf
+
+  vim.bo[buf].bufhidden = "hide"
+  vim.bo[buf].buflisted = false
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].filetype = "erwin-git-workspace-conflicts"
+  vim.bo[buf].swapfile = false
+
+  apply_conflict_mappings(buf)
+  api.nvim_create_autocmd({ "CursorMoved", "WinEnter" }, {
+    group = group,
+    buffer = buf,
+    callback = function()
+      if state.conflict_preview_suspended then
+        return
+      end
+      open_conflict_selection({ preserve_focus = true })
+    end,
+  })
+
+  return buf
+end
+
+local function close_conflict_window()
+  if is_valid_win(state.conflict_win) then
+    pcall(api.nvim_win_close, state.conflict_win, true)
+  end
+
+  state.conflict_win = nil
+  state.conflict_buf = nil
+  state.conflict_line_items = {}
+end
+
+local function attach_conflict_sidebar()
+  local buf = ensure_conflict_buf()
+
+  if is_valid_win(state.conflict_win) then
+    api.nvim_win_set_buf(state.conflict_win, buf)
+    return
+  end
+
+  state.conflict_win = api.nvim_open_win(buf, false, {
+    split = "right",
+    vertical = true,
+    win = state.main_win,
+    width = state.conflict_width,
+  })
+
+  configure_conflict_window(state.conflict_win)
 end
 
 local function close_sidebar_status_window()
@@ -1629,6 +1829,17 @@ current_sidebar_item = function()
   return state.line_items[line]
 end
 
+current_conflict_item = function()
+  reset_closed_handles()
+
+  if not is_valid_win(state.conflict_win) then
+    return nil
+  end
+
+  local line = api.nvim_win_get_cursor(state.conflict_win)[1]
+  return state.conflict_line_items[line]
+end
+
 render_sidebar_status = function()
   if not is_valid_tab(state.tabpage) then
     set_git_workspace_status_path("")
@@ -1642,6 +1853,128 @@ render_sidebar_status = function()
   end
 
   set_git_workspace_status_path("")
+end
+
+local function set_conflict_cursor(line)
+  if not is_valid_win(state.conflict_win) then
+    return false
+  end
+
+  local buf = api.nvim_win_get_buf(state.conflict_win)
+  local max_line = math.max(api.nvim_buf_line_count(buf), 1)
+  line = math.min(math.max(math.floor(tonumber(line) or 1), 1), max_line)
+
+  state.conflict_preview_suspended = true
+  local ok = pcall(api.nvim_win_set_cursor, state.conflict_win, { line, 0 })
+  state.conflict_preview_suspended = false
+  return ok
+end
+
+local function sync_conflict_selection(repo_path, file_path)
+  if not is_valid_win(state.conflict_win) then
+    return false
+  end
+
+  for line, item in pairs(state.conflict_line_items) do
+    if item.repo and item.file and item.repo.path == repo_path and item.file.path == file_path then
+      return set_conflict_cursor(line)
+    end
+  end
+
+  return false
+end
+
+render_conflict_sidebar = function()
+  if not is_valid_tab(state.tabpage) then
+    close_conflict_window()
+    return
+  end
+
+  local repo = conflict_repo_for_context()
+  if not repo then
+    close_conflict_window()
+    return
+  end
+
+  repo = find_repo_by_path(state.repos, repo.path) or repo
+  local conflicts = repo_conflict_files(repo)
+  if vim.tbl_isempty(conflicts) then
+    close_conflict_window()
+    return
+  end
+
+  attach_conflict_sidebar()
+  if not is_valid_buf(state.conflict_buf) then
+    return
+  end
+
+  local lines = {
+    " Conflicts",
+    "",
+  }
+
+  state.conflict_line_items = {}
+  local selected_path = nil
+  if state.current_diff and state.current_diff.repo_path == repo.path and state.current_diff.conflicted then
+    selected_path = state.current_diff.file_path
+  else
+    local item = current_sidebar_item()
+    if item and item.kind == "file" and item.repo and item.repo.path == repo.path and item.file and item.file.conflicted then
+      selected_path = item.file.path
+    end
+  end
+
+  for _, file in ipairs(conflicts) do
+    table.insert(lines, " ! " .. shorten(file.path, math.max(state.conflict_width - 4, 20)))
+    state.conflict_line_items[#lines] = {
+      kind = "conflict_file",
+      repo = repo,
+      file = file,
+    }
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "  <CR> open conflict")
+
+  vim.bo[state.conflict_buf].modifiable = true
+  api.nvim_buf_set_lines(state.conflict_buf, 0, -1, false, lines)
+  vim.bo[state.conflict_buf].modifiable = false
+
+  api.nvim_buf_clear_namespace(state.conflict_buf, -1, 0, -1)
+  api.nvim_buf_add_highlight(state.conflict_buf, -1, "Title", 0, 1, -1)
+
+  for line, item in pairs(state.conflict_line_items) do
+    api.nvim_buf_add_highlight(state.conflict_buf, -1, "DiagnosticError", line - 1, 0, -1)
+  end
+
+  local hint_line = #lines - 1
+  if hint_line >= 0 then
+    api.nvim_buf_add_highlight(state.conflict_buf, -1, "Comment", hint_line, 0, -1)
+  end
+
+  configure_conflict_window(state.conflict_win)
+
+  local target_line = nil
+  if selected_path then
+    for line, item in pairs(state.conflict_line_items) do
+      if item.file and item.file.path == selected_path then
+        target_line = line
+        break
+      end
+    end
+  end
+  if target_line == nil then
+    for line, item in pairs(state.conflict_line_items) do
+      if item.file then
+        target_line = line
+        break
+      end
+    end
+  end
+
+  if target_line then
+    set_conflict_cursor(target_line)
+  end
 end
 
 render_sidebar_preview = function()
@@ -1833,6 +2166,7 @@ function M.render(repos)
   end
 
   repos = repos or M.collect()
+  state.repos = repos
   state.repo_snapshot = repo_status_snapshot(repos)
   local lines = {
     " Source Control",
@@ -1901,6 +2235,7 @@ function M.render(repos)
 
   render_sidebar_status()
   render_sidebar_preview()
+  render_conflict_sidebar()
 end
 
 local function restore_placeholder_view()
@@ -2164,7 +2499,7 @@ end
 
 close_extra_main_windows = function(keep)
   for _, win in ipairs(main_wins()) do
-    if win ~= keep then
+    if win ~= keep and win ~= state.conflict_win then
       pcall(api.nvim_win_close, win, true)
     end
   end
@@ -2277,6 +2612,143 @@ local function parse_diff_blocks(raw_lines)
   end
 
   return blocks
+end
+
+local function parse_conflict_regions(lines)
+  local regions = {}
+  local current = nil
+
+  for index, line in ipairs(lines or {}) do
+    if current == nil and line:match("^<<<<<<< ") then
+      current = {
+        start = index,
+      }
+    elseif current ~= nil and current.base == nil and current.separator == nil and line:match("^|||||||") then
+      current.base = index
+    elseif current ~= nil and current.separator == nil and line == "=======" then
+      current.separator = index
+    elseif current ~= nil and current.separator ~= nil and line:match("^>>>>>>> ") then
+      current.finish = index
+      regions[#regions + 1] = current
+      current = nil
+    end
+  end
+
+  return regions
+end
+
+local function build_conflict_view(repo, file)
+  local lines = {}
+  local highlights = {}
+  local hunks = {}
+  local scrollbar_marks = {}
+  local line_map = {}
+
+  local function add_line(text, group, scrollbar_type, source_line)
+    table.insert(lines, text)
+    local line_number = #lines
+
+    if source_line ~= nil then
+      line_map[line_number] = source_line
+    end
+
+    if group then
+      highlights[#highlights + 1] = { line = line_number, group = group }
+    end
+
+    if scrollbar_type then
+      scrollbar_marks[#scrollbar_marks + 1] = {
+        line = line_number - 1,
+        text = "▏",
+        type = scrollbar_type,
+        level = 1,
+      }
+    end
+
+    return line_number
+  end
+
+  local current_lines, read_err = read_file_lines(join(repo.path, file.path))
+  if current_lines == nil then
+    add_line("Unable to read conflicted file.", "Comment")
+    add_line(tostring(read_err), "DiagnosticError")
+    return {
+      lines = lines,
+      highlights = highlights,
+      hunks = hunks,
+      scrollbar_marks = scrollbar_marks,
+      line_map = line_map,
+    }
+  end
+
+  local regions = parse_conflict_regions(current_lines)
+  if vim.tbl_isempty(regions) then
+    add_line(file.path, "Title")
+    add_line("No conflict markers found in working tree file.", "Comment")
+    add_line("")
+    for index, line in ipairs(current_lines) do
+      add_line(line, nil, nil, index)
+    end
+    return {
+      lines = lines,
+      highlights = highlights,
+      hunks = hunks,
+      scrollbar_marks = scrollbar_marks,
+      line_map = line_map,
+    }
+  end
+
+  add_line(file.path, "Title")
+  add_line("Conflicted file", "DiagnosticError")
+  add_line("")
+
+  for region_index, region in ipairs(regions) do
+    local heading = string.format("Conflict %d  lines %d-%d", region_index, region.start, region.finish)
+    local anchor = add_line(heading, "Title", "GitChange")
+    hunks[#hunks + 1] = anchor
+
+    local first_line = math.max(region.start - 2, 1)
+    local last_line = math.min(region.finish + 2, #current_lines)
+    for source_line = first_line, last_line do
+      local text = current_lines[source_line]
+      local hl = nil
+      local mark = nil
+
+      if source_line == region.start or source_line == region.finish then
+        hl = "DiagnosticError"
+        mark = "GitDelete"
+      elseif region.base and source_line == region.base then
+        hl = "Comment"
+        mark = "GitChange"
+      elseif source_line == region.separator then
+        hl = "DiagnosticWarn"
+        mark = "GitChange"
+      elseif source_line > region.start and source_line < (region.base or region.separator) then
+        hl = "DiffDelete"
+        mark = "GitDelete"
+      elseif region.base and source_line > region.base and source_line < region.separator then
+        hl = "Comment"
+        mark = "GitChange"
+      elseif source_line > region.separator and source_line < region.finish then
+        hl = "DiffAdd"
+        mark = "GitAdd"
+      end
+
+      add_line(text, hl, mark, source_line)
+    end
+
+    if region_index < #regions then
+      add_line("")
+    end
+  end
+
+  return {
+    lines = lines,
+    highlights = highlights,
+    hunks = hunks,
+    scrollbar_marks = scrollbar_marks,
+    line_map = line_map,
+  }
 end
 
 local function build_diff_view(repo, file, raw_lines)
@@ -2675,44 +3147,48 @@ open_diff = function(repo, file, opts)
   close_extra_main_windows(win)
   state.main_win = win
 
-  local output, err = unified_diff_output(repo, file)
   local diff_view
-  if output and output ~= "" then
-    diff_view = build_diff_view(repo, file, diff_lines(output))
-  elseif err and err ~= "" then
-    diff_view = {
-      lines = {
-        file.path,
-        "diff unavailable",
-        "",
-        "Unable to render diff for " .. file.path,
-        err,
-      },
-      highlights = {
-        { line = 1, group = "Title" },
-        { line = 2, group = "Comment" },
-        { line = 4, group = "Comment" },
-        { line = 5, group = "DiagnosticError" },
-      },
-      hunks = {},
-      scrollbar_marks = {},
-    }
+  if file.conflicted then
+    diff_view = build_conflict_view(repo, file)
   else
-    diff_view = {
-      lines = {
-        file.path,
-        diff_status_summary(file),
-        "",
-        "No textual diff available.",
-      },
-      highlights = {
-        { line = 1, group = "Title" },
-        { line = 2, group = "Comment" },
-        { line = 4, group = "Comment" },
-      },
-      hunks = {},
-      scrollbar_marks = {},
-    }
+    local output, err = unified_diff_output(repo, file)
+    if output and output ~= "" then
+      diff_view = build_diff_view(repo, file, diff_lines(output))
+    elseif err and err ~= "" then
+      diff_view = {
+        lines = {
+          file.path,
+          "diff unavailable",
+          "",
+          "Unable to render diff for " .. file.path,
+          err,
+        },
+        highlights = {
+          { line = 1, group = "Title" },
+          { line = 2, group = "Comment" },
+          { line = 4, group = "Comment" },
+          { line = 5, group = "DiagnosticError" },
+        },
+        hunks = {},
+        scrollbar_marks = {},
+      }
+    else
+      diff_view = {
+        lines = {
+          file.path,
+          diff_status_summary(file),
+          "",
+          "No textual diff available.",
+        },
+        highlights = {
+          { line = 1, group = "Title" },
+          { line = 2, group = "Comment" },
+          { line = 4, group = "Comment" },
+        },
+        hunks = {},
+        scrollbar_marks = {},
+      }
+    end
   end
 
   local buf = create_scratch_buffer(
@@ -2728,6 +3204,8 @@ open_diff = function(repo, file, opts)
     file_path = file.path,
     buf = buf,
     hunks = sanitized_hunks,
+    conflicts = file.conflicted and sanitized_hunks or {},
+    conflicted = file.conflicted == true,
     line_map = diff_view.line_map,
     repo_path = repo.path,
     win = win,
@@ -2753,6 +3231,9 @@ open_diff = function(repo, file, opts)
   else
     api.nvim_set_current_win(win)
   end
+
+  sync_conflict_selection(repo.path, file.path)
+  render_conflict_sidebar()
 
   return true
 end
@@ -2850,6 +3331,77 @@ function M.jump_change(direction)
   return false
 end
 
+function M.jump_conflict(direction)
+  reset_closed_handles()
+
+  if not is_valid_tab(state.tabpage) or api.nvim_get_current_tabpage() ~= state.tabpage then
+    return false
+  end
+
+  local current = state.current_diff
+  if current ~= nil and current.conflicted and is_valid_buf(current.buf) and in_git_tab(current.win) and api.nvim_get_current_win() == current.win then
+    if jump_to_hunk(current.win, current.conflicts or {}, direction) then
+      return true
+    end
+  end
+
+  local items = ordered_conflict_sidebar_items()
+  if vim.tbl_isempty(items) then
+    return false
+  end
+
+  local reference = nil
+  if current ~= nil and current.conflicted then
+    reference = {
+      repo_path = current.repo_path,
+      file_path = current.file_path,
+    }
+  else
+    local conflict_item = current_conflict_item()
+    if conflict_item and conflict_item.repo and conflict_item.file then
+      reference = {
+        repo_path = conflict_item.repo.path,
+        file_path = conflict_item.file.path,
+      }
+    else
+      local sidebar_item = current_sidebar_item()
+      if sidebar_item and sidebar_item.kind == "file" and sidebar_item.repo and sidebar_item.file and sidebar_item.file.conflicted then
+        reference = {
+          repo_path = sidebar_item.repo.path,
+          file_path = sidebar_item.file.path,
+        }
+      end
+    end
+  end
+
+  local target_item = nil
+  if reference then
+    local pseudo_current = {
+      repo_path = reference.repo_path,
+      file_path = reference.file_path,
+    }
+    target_item = adjacent_conflict_item(pseudo_current, direction)
+  end
+
+  if not target_item then
+    target_item = direction == "prev" and items[#items].item or items[1].item
+  end
+
+  if not target_item then
+    return false
+  end
+
+  if open_diff(target_item.repo, target_item.file, {
+    cursor = direction == "prev" and "last" or "first",
+  }) then
+    sync_sidebar_file_selection(target_item.repo.path, target_item.file.path)
+    sync_conflict_selection(target_item.repo.path, target_item.file.path)
+    return true
+  end
+
+  return false
+end
+
 function M.close()
   reset_closed_handles()
 
@@ -2861,11 +3413,15 @@ function M.close()
   state.tabpage = nil
   state.sidebar_win = nil
   state.sidebar_status_win = nil
+  state.conflict_win = nil
   state.main_win = nil
   state.current_diff = nil
   state.repo_snapshot = nil
   state.preview_buf = nil
   state.preview_signature = nil
+  state.conflict_buf = nil
+  state.conflict_line_items = {}
+  state.repos = {}
   set_git_workspace_status_path("")
   stop_refresh_timer()
   reset_status_check_queue()
