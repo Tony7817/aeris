@@ -2,6 +2,9 @@ local api = vim.api
 local fn = vim.fn
 
 local M = {}
+local DEFAULT_HEIGHT_RATIO = 0.22
+local MIN_HEIGHT = 8
+local HEIGHT_STEP = 4
 
 local state = {
   active_id = nil,
@@ -10,6 +13,7 @@ local state = {
   sidebar_buf = nil,
   sidebar_win = nil,
   sidebar_width = 34,
+  height = nil,
 }
 
 local group = api.nvim_create_augroup("erwin_terminal_manager", { clear = true })
@@ -24,6 +28,26 @@ end
 
 local function is_valid_win(win)
   return win ~= nil and api.nvim_win_is_valid(win)
+end
+
+local function default_height()
+  return math.max(12, math.floor(vim.o.lines * DEFAULT_HEIGHT_RATIO))
+end
+
+local function clamp_height(height)
+  local max_height = math.max(MIN_HEIGHT, vim.o.lines - 6)
+  height = math.floor(tonumber(height) or default_height())
+  return math.min(math.max(height, MIN_HEIGHT), max_height)
+end
+
+function M.current_height()
+  state.height = clamp_height(state.height)
+  return state.height
+end
+
+local function set_height(height)
+  state.height = clamp_height(height)
+  return state.height
 end
 
 local function window_filetype(win)
@@ -126,6 +150,23 @@ local function focus_window(win)
   return true
 end
 
+local function with_window(win, callback)
+  if not is_valid_win(win) then
+    return false
+  end
+
+  local previous = api.nvim_get_current_win()
+  api.nvim_set_current_win(win)
+  local ok, result = pcall(callback)
+  if is_valid_win(previous) and previous ~= win then
+    api.nvim_set_current_win(previous)
+  end
+  if not ok then
+    error(result)
+  end
+  return result
+end
+
 local function current_git_workspace_host_window()
   local tabpage = api.nvim_get_current_tabpage()
   local has_sidebar = false
@@ -184,7 +225,7 @@ local function open_term_in_host(term, host_win)
   api.nvim_win_set_buf(term_win, term.bufnr)
   term:__set_options()
   api.nvim_set_current_buf(term.bufnr)
-  ui.resize_split(term)
+  ui.resize_split(term, M.current_height())
 
   if not term.job_id then
     term:spawn()
@@ -200,6 +241,42 @@ local function open_term_in_host(term, host_win)
   end
 
   return true
+end
+
+local function active_open_term()
+  local term_id = current_window_term_id() or active_term_id()
+  local term = term_id and get_term(term_id) or nil
+  if not term or not term:is_open() or not is_valid_win(term.window) then
+    return nil
+  end
+  return term
+end
+
+local function apply_height_to_term(term)
+  if not term or not term:is_open() or not is_valid_win(term.window) then
+    return false
+  end
+
+  return with_window(term.window, function()
+    require("toggleterm.ui").resize_split(term, M.current_height())
+    return true
+  end) or false
+end
+
+function M.increase_size(step)
+  local term = active_open_term()
+  local base_height = term and api.nvim_win_get_height(term.window) or M.current_height()
+  set_height(base_height + (step or HEIGHT_STEP))
+  apply_height_to_term(term)
+  return M.current_height()
+end
+
+function M.decrease_size(step)
+  local term = active_open_term()
+  local base_height = term and api.nvim_win_get_height(term.window) or M.current_height()
+  set_height(base_height - (step or HEIGHT_STEP))
+  apply_height_to_term(term)
+  return M.current_height()
 end
 
 local function active_term_id()

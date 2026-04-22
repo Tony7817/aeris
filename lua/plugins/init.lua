@@ -370,7 +370,7 @@ return {
       shade_terminals = false,
       start_in_insert = true,
       size = function()
-        return math.max(12, math.floor(vim.o.lines * 0.22))
+        return require("config.terminals").current_height()
       end,
     },
   },
