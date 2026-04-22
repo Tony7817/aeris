@@ -4,6 +4,22 @@ local M = {}
 
 local return_stack = {}
 
+local function location_matches(a, b)
+  if a == nil or b == nil then
+    return false
+  end
+
+  if a.tabpage ~= b.tabpage or a.bufnr ~= b.bufnr then
+    return false
+  end
+
+  if a.cursor == nil or b.cursor == nil then
+    return true
+  end
+
+  return a.cursor[1] == b.cursor[1]
+end
+
 local function is_valid_tab(tabpage)
   return tabpage ~= nil and api.nvim_tabpage_is_valid(tabpage)
 end
@@ -12,8 +28,21 @@ local function is_valid_win(win)
   return win ~= nil and api.nvim_win_is_valid(win)
 end
 
-local function push_return_location(location)
-  return_stack[#return_stack + 1] = location
+local function normalize_frame(frame)
+  if type(frame) == "table" and frame.return_location ~= nil then
+    return frame
+  end
+
+  return {
+    return_location = frame,
+  }
+end
+
+local function push_return_location(location, entry_location)
+  return_stack[#return_stack + 1] = {
+    return_location = location,
+    entry_location = entry_location,
+  }
 end
 
 local function restore_return_location(location)
@@ -178,21 +207,42 @@ function M.goto_definition_from(opts)
     return
   end
 
+  local bufnr = open_workspace_file(path, opts.cursor, opts.workspace_root)
   if opts.return_location ~= nil then
-    push_return_location(opts.return_location)
+    push_return_location(opts.return_location, {
+      tabpage = api.nvim_get_current_tabpage(),
+      win = api.nvim_get_current_win(),
+      bufnr = bufnr,
+      cursor = opts.cursor or api.nvim_win_get_cursor(0),
+    })
   end
 
-  local bufnr = open_workspace_file(path, opts.cursor, opts.workspace_root)
   when_lsp_ready(bufnr, path, "textDocument/definition", function(ready_buf)
     focus_buffer(ready_buf)
     vim.lsp.buf.definition()
   end)
 end
 
+function M.after_jumplist_back(location)
+  while #return_stack > 0 do
+    local frame = normalize_frame(return_stack[#return_stack])
+    if frame.entry_location == nil or not location_matches(frame.entry_location, location) then
+      return false
+    end
+
+    table.remove(return_stack)
+    if restore_return_location(frame.return_location) then
+      return true
+    end
+  end
+
+  return false
+end
+
 function M.jump_back()
   while #return_stack > 0 do
-    local location = table.remove(return_stack)
-    if restore_return_location(location) then
+    local frame = normalize_frame(table.remove(return_stack))
+    if restore_return_location(frame.return_location) then
       return true
     end
   end

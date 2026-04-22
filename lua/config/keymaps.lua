@@ -24,11 +24,15 @@ local function jump_back()
   vim.cmd("silent! normal! " .. vim.keycode("<C-o>"))
   local after = location_state()
 
+  local ok, code_navigation = pcall(require, "config.code_navigation")
+  if ok and code_navigation.after_jumplist_back and code_navigation.after_jumplist_back(after) then
+    return
+  end
+
   if not same_location(before, after) then
     return
   end
 
-  local ok, code_navigation = pcall(require, "config.code_navigation")
   if ok and code_navigation.jump_back and code_navigation.jump_back() then
     return
   end
