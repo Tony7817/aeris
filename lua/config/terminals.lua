@@ -112,6 +112,96 @@ local function remember_main_window()
   state.last_main_win = win
 end
 
+local function focus_window(win)
+  if not is_valid_win(win) then
+    return false
+  end
+
+  local tabpage = api.nvim_win_get_tabpage(win)
+  if api.nvim_get_current_tabpage() ~= tabpage then
+    api.nvim_set_current_tabpage(tabpage)
+  end
+  api.nvim_set_current_win(win)
+  state.last_main_win = win
+  return true
+end
+
+local function current_git_workspace_host_window()
+  local tabpage = api.nvim_get_current_tabpage()
+  local has_sidebar = false
+  local preferred = nil
+  local fallback = nil
+
+  for _, win in ipairs(api.nvim_tabpage_list_wins(tabpage)) do
+    local buf = api.nvim_win_get_buf(win)
+    local filetype = vim.bo[buf].filetype
+    local buftype = vim.bo[buf].buftype
+    local name = api.nvim_buf_get_name(buf)
+
+    if filetype == "erwin-git-workspace" then
+      has_sidebar = true
+    elseif filetype ~= "erwin-git-workspace-conflicts" and filetype ~= "toggleterm" and buftype ~= "terminal" then
+      if type(name) == "string" and vim.startswith(name, "git-workspace://") then
+        preferred = win
+      elseif fallback == nil then
+        fallback = win
+      end
+    end
+  end
+
+  if not has_sidebar then
+    return nil
+  end
+
+  return preferred or fallback
+end
+
+local function term_visible_in_tab(term, tabpage)
+  return term
+    and term:is_open()
+    and is_valid_win(term.window)
+    and api.nvim_win_get_tabpage(term.window) == tabpage
+end
+
+local function open_term_in_host(term, host_win)
+  if not focus_window(host_win) then
+    return false
+  end
+
+  local ui = require("toggleterm.ui")
+  local config = require("toggleterm.config")
+
+  ui.set_origin_window()
+  vim.cmd("rightbelow split")
+
+  local term_win = api.nvim_get_current_win()
+  term.window = term_win
+
+  if not term.bufnr or not api.nvim_buf_is_valid(term.bufnr) then
+    term.bufnr = ui.create_buf()
+  end
+
+  api.nvim_win_set_buf(term_win, term.bufnr)
+  term:__set_options()
+  api.nvim_set_current_buf(term.bufnr)
+  ui.resize_split(term)
+
+  if not term.job_id then
+    term:spawn()
+  end
+
+  ui.hl_term(term)
+  if term.on_open then
+    term:on_open()
+  end
+
+  if config.get("start_in_insert") and term.window == api.nvim_get_current_win() then
+    vim.cmd("startinsert")
+  end
+
+  return true
+end
+
 local function active_term_id()
   local focused = terminals().get_focused_id()
   if focused then
@@ -137,18 +227,9 @@ local function get_sidebar_line_for_term(term_id)
   return nil
 end
 
-local function focus_main_window()
-  local function focus_window(win)
-    if not is_valid_win(win) then
-      return false
-    end
-
-    local tabpage = api.nvim_win_get_tabpage(win)
-    if api.nvim_get_current_tabpage() ~= tabpage then
-      api.nvim_set_current_tabpage(tabpage)
-    end
-    api.nvim_set_current_win(win)
-    return true
+local function focus_main_window(preferred_win)
+  if focus_window(preferred_win) then
+    return
   end
 
   if is_valid_win(state.last_main_win) and state.last_main_win ~= state.sidebar_win and is_primary_window(state.last_main_win) then
@@ -160,7 +241,6 @@ local function focus_main_window()
   local function scan_tab(tabpage)
     for _, win in ipairs(api.nvim_tabpage_list_wins(tabpage)) do
       if (not sidebar_is_open() or win ~= state.sidebar_win) and is_primary_window(win) then
-        state.last_main_win = win
         return focus_window(win)
       end
     end
@@ -419,12 +499,25 @@ function M.open_terminal(term_id)
     return
   end
 
-  focus_main_window()
+  local host_win = current_git_workspace_host_window()
+  local host_tab = is_valid_win(host_win) and api.nvim_win_get_tabpage(host_win) or nil
+
+  focus_main_window(host_win)
   close_other_terms(term.id)
 
-  if term:is_open() then
+  if host_tab and term_visible_in_tab(term, host_tab) then
     term:focus()
+  elseif host_win then
+    if term:is_open() then
+      term:close()
+    end
+    if not open_term_in_host(term, host_win) then
+      return
+    end
   else
+    if term:is_open() then
+      term:close()
+    end
     term:open()
   end
 
@@ -499,9 +592,16 @@ function M.new_terminal()
 
   term.display_name = string.format("terminal-%d", term.id)
   local keep_sidebar = sidebar_is_open()
-  focus_main_window()
+  local host_win = current_git_workspace_host_window()
+  focus_main_window(host_win)
   close_other_terms(term.id)
-  term:open()
+  if host_win then
+    if not open_term_in_host(term, host_win) then
+      return
+    end
+  else
+    term:open()
+  end
   state.active_id = term.id
   if not keep_sidebar then
     vim.schedule(M.open_sidebar)
