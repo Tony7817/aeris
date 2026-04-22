@@ -383,6 +383,16 @@ function M.open_selected()
   end
 end
 
+function M.open_or_new()
+  local term_id = active_term_id()
+  if term_id then
+    M.open_terminal(term_id)
+    return
+  end
+
+  M.new_terminal()
+end
+
 function M.hide_current()
   local term_id = current_window_term_id() or active_term_id()
   local term = term_id and get_term(term_id) or nil

@@ -209,7 +209,8 @@ Ctrl-o
 
 | 快捷键 | 作用 |
 | --- | --- |
-| `Space tt` | 新建 terminal |
+| `Space tt` | 打开当前 terminal；如果还没有 terminal，则创建一个 |
+| `Space tn` | 新建 terminal |
 | `Space tl` | 聚焦 / 切换 terminal 列表 |
 | `Esc Esc` | terminal 回到 Normal 模式 |
 

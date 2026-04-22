@@ -211,7 +211,8 @@ That means:
 
 | Key | Action |
 | --- | --- |
-| `Space tt` | Create a new terminal |
+| `Space tt` | Open the current terminal, or create one if none exists |
+| `Space tn` | Create a new terminal |
 | `Space tl` | Focus / toggle terminal list |
 | `Esc Esc` | Leave terminal insert mode |
 
