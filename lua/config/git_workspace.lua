@@ -27,6 +27,7 @@ local state = {
   status_check_active = false,
   remote_check_queue = {},
   remote_check_active = false,
+  sidebar_preview_suspended = false,
 }
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
@@ -36,6 +37,7 @@ local configure_main_window
 local current_branch
 local configured_remote
 local current_sidebar_item
+local open_diff
 local render_sidebar_status
 local render_sidebar_preview
 local repo_entry
@@ -1136,6 +1138,74 @@ local function selected_item()
   return current_sidebar_item()
 end
 
+local function ordered_file_sidebar_items()
+  if not is_valid_buf(state.sidebar_buf) then
+    return {}
+  end
+
+  local items = {}
+  local line_count = api.nvim_buf_line_count(state.sidebar_buf)
+
+  for line = 1, line_count do
+    local item = state.line_items[line]
+    if item and item.kind == "file" then
+      items[#items + 1] = {
+        line = line,
+        item = item,
+      }
+    end
+  end
+
+  return items
+end
+
+local function set_sidebar_cursor(line)
+  if not is_valid_win(state.sidebar_win) then
+    return false
+  end
+
+  local buf = api.nvim_win_get_buf(state.sidebar_win)
+  local max_line = math.max(api.nvim_buf_line_count(buf), 1)
+  line = math.min(math.max(math.floor(tonumber(line) or 1), 1), max_line)
+
+  state.sidebar_preview_suspended = true
+  local ok = pcall(api.nvim_win_set_cursor, state.sidebar_win, { line, 0 })
+  state.sidebar_preview_suspended = false
+  return ok
+end
+
+local function sync_sidebar_file_selection(repo_path, file_path)
+  for _, entry in ipairs(ordered_file_sidebar_items()) do
+    local item = entry.item
+    if item.repo and item.file and item.repo.path == repo_path and item.file.path == file_path then
+      if set_sidebar_cursor(entry.line) then
+        render_sidebar_status()
+      end
+      return true
+    end
+  end
+
+  return false
+end
+
+local function adjacent_file_item(current, direction)
+  local items = ordered_file_sidebar_items()
+  local step = direction == "prev" and -1 or 1
+
+  for index, entry in ipairs(items) do
+    local item = entry.item
+    if item.repo and item.file and item.repo.path == current.repo_path and item.file.path == current.file_path then
+      local target = items[index + step]
+      if target then
+        return target.item, target.line
+      end
+      break
+    end
+  end
+
+  return nil, nil
+end
+
 local function focus_sidebar()
   reset_closed_handles()
 
@@ -1511,6 +1581,9 @@ local function ensure_sidebar_buf()
     group = group,
     buffer = buf,
     callback = function()
+      if state.sidebar_preview_suspended then
+        return
+      end
       render_sidebar_status()
       render_sidebar_preview()
     end,
@@ -1625,7 +1698,20 @@ render_sidebar_preview = function()
   local item = current_sidebar_item()
   if item and item.kind == "file" and state.current_diff ~= nil then
     local current = state.current_diff
-    if current.repo_path == item.repo.path and current.file_path == item.file.path and is_valid_buf(current.buf) then
+    if current.repo_path == item.repo.path
+      and current.file_path == item.file.path
+      and is_valid_buf(current.buf)
+      and api.nvim_win_get_buf(win) == current.buf
+    then
+      return
+    end
+  end
+
+  if item and item.kind == "file" then
+    if open_diff(item.repo, item.file, {
+      preserve_focus = true,
+      cursor = "first",
+    }) then
       return
     end
   end
@@ -2685,6 +2771,22 @@ local function sanitize_diff_hunks(buf, hunks)
   return sanitized
 end
 
+local function preferred_diff_cursor_line(buf, hunks, direction)
+  if direction == "last" and hunks[#hunks] then
+    return hunks[#hunks]
+  end
+
+  if hunks[1] then
+    return hunks[1]
+  end
+
+  if direction == "last" then
+    return clamped_buf_line(buf, api.nvim_buf_line_count(buf))
+  end
+
+  return 1
+end
+
 local function jump_to_hunk(win, hunks, direction)
   if not is_valid_win(win) or #hunks == 0 then
     return false
@@ -2723,16 +2825,18 @@ local function jump_to_hunk(win, hunks, direction)
   return true
 end
 
-local function open_diff(repo, file)
+open_diff = function(repo, file, opts)
+  opts = opts or {}
   if not repo or not file or not is_valid_tab(state.tabpage) then
-    return
+    return false
   end
 
+  local previous_win = opts.preserve_focus and api.nvim_get_current_win() or nil
   api.nvim_set_current_tabpage(state.tabpage)
 
   local win = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
   if not win then
-    return
+    return false
   end
 
   close_extra_main_windows(win)
@@ -2803,15 +2907,21 @@ local function open_diff(repo, file)
   configure_main_window(win)
   apply_diff_highlights(buf, diff_view)
   apply_diff_scrollbar_marks(buf, win, diff_view)
-  api.nvim_set_current_win(win)
-  if sanitized_hunks[1] then
-    api.nvim_win_set_cursor(win, { sanitized_hunks[1], 0 })
-    window_call(win, function()
-      vim.cmd("normal! zz")
-    end)
+  api.nvim_win_set_cursor(win, {
+    preferred_diff_cursor_line(buf, sanitized_hunks, opts.cursor),
+    0,
+  })
+  window_call(win, function()
+    vim.cmd("normal! zz")
+  end)
+
+  if opts.preserve_focus and is_valid_win(previous_win) then
+    api.nvim_set_current_win(previous_win)
   else
-    api.nvim_win_set_cursor(win, { 1, 0 })
+    api.nvim_set_current_win(win)
   end
+
+  return true
 end
 
 function M.toggle_selected()
@@ -2887,7 +2997,21 @@ function M.jump_change(direction)
   end
 
   if api.nvim_get_current_win() == current.win then
-    return jump_to_hunk(current.win, current.hunks or {}, direction)
+    if jump_to_hunk(current.win, current.hunks or {}, direction) then
+      return true
+    end
+
+    local next_item = adjacent_file_item(current, direction)
+    if not next_item then
+      return false
+    end
+
+    if open_diff(next_item.repo, next_item.file, {
+      cursor = direction == "prev" and "last" or "first",
+    }) then
+      sync_sidebar_file_selection(next_item.repo.path, next_item.file.path)
+      return true
+    end
   end
 
   return false
