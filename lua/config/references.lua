@@ -5,6 +5,7 @@ local M = {}
 local state = {
   tabpage = nil,
   origin_win = nil,
+  origin = nil,
   list_win = nil,
   preview_win = nil,
   list_buf = nil,
@@ -31,16 +32,75 @@ local function in_panel_tab(win)
   return is_valid_tab(state.tabpage) and is_valid_win(win) and api.nvim_win_get_tabpage(win) == state.tabpage
 end
 
+local function is_panel_win(win)
+  return win == state.list_win or win == state.preview_win
+end
+
+local function capture_origin(win)
+  if not is_valid_win(win) or is_panel_win(win) then
+    state.origin = nil
+    state.origin_win = nil
+    return
+  end
+
+  local ok_cursor, cursor = pcall(api.nvim_win_get_cursor, win)
+  local ok_view, view = pcall(api.nvim_win_call, win, vim.fn.winsaveview)
+
+  state.origin = {
+    tabpage = api.nvim_win_get_tabpage(win),
+    win = win,
+    bufnr = api.nvim_win_get_buf(win),
+    cursor = ok_cursor and cursor or nil,
+    view = ok_view and view or nil,
+  }
+  state.origin_win = win
+end
+
+local function restore_origin(origin)
+  if type(origin) ~= "table" then
+    return
+  end
+
+  if is_valid_tab(origin.tabpage) then
+    pcall(api.nvim_set_current_tabpage, origin.tabpage)
+  end
+
+  local win = origin.win
+  if not is_valid_win(win) then
+    return
+  end
+
+  pcall(api.nvim_set_current_win, win)
+
+  if is_valid_buf(origin.bufnr) and api.nvim_win_get_buf(win) ~= origin.bufnr then
+    pcall(api.nvim_win_set_buf, win, origin.bufnr)
+  end
+
+  if type(origin.view) == "table" then
+    pcall(api.nvim_win_call, win, function()
+      vim.fn.winrestview(origin.view)
+    end)
+  elseif type(origin.cursor) == "table" then
+    pcall(api.nvim_win_set_cursor, win, origin.cursor)
+  end
+end
+
 local function reset_closed_handles()
   if not is_valid_tab(state.tabpage) then
     state.tabpage = nil
     state.origin_win = nil
+    state.origin = nil
     state.list_win = nil
     state.preview_win = nil
   end
 
   if not in_panel_tab(state.origin_win) then
     state.origin_win = nil
+  end
+  if type(state.origin) == "table" then
+    if not is_valid_tab(state.origin.tabpage) or not is_valid_win(state.origin.win) then
+      state.origin = nil
+    end
   end
   if not in_panel_tab(state.list_win) then
     state.list_win = nil
@@ -183,7 +243,7 @@ local function jump_to_item(item)
     target_win = fallback_origin_win()
   end
 
-  M.close()
+  M.close({ restore_origin = false })
 
   if not is_valid_win(target_win) then
     return
@@ -284,6 +344,10 @@ local function bind_list_buffer(buf)
     M.close()
   end, { buffer = buf, desc = "Close references panel", nowait = true, silent = true })
 
+  vim.keymap.set("n", "<Esc>", function()
+    M.close()
+  end, { buffer = buf, desc = "Cancel references panel", nowait = true, silent = true })
+
   api.nvim_create_autocmd({ "CursorMoved", "BufEnter" }, {
     group = group,
     buffer = buf,
@@ -297,6 +361,10 @@ local function bind_preview_buffer(buf)
   vim.keymap.set("n", "q", function()
     M.close()
   end, { buffer = buf, desc = "Close references panel", nowait = true, silent = true })
+
+  vim.keymap.set("n", "<Esc>", function()
+    M.close()
+  end, { buffer = buf, desc = "Cancel references panel", nowait = true, silent = true })
 end
 
 local function ensure_layout()
@@ -304,17 +372,22 @@ local function ensure_layout()
 
   local current_tab = api.nvim_get_current_tabpage()
   local current_win = api.nvim_get_current_win()
+  local origin_win = current_win
+
+  if is_panel_win(origin_win) or not is_valid_win(origin_win) then
+    origin_win = fallback_origin_win()
+  end
 
   if state.tabpage == current_tab and is_valid_win(state.list_win) and is_valid_win(state.preview_win) then
-    state.origin_win = current_win
+    capture_origin(origin_win)
     balance_panel_widths()
     return
   end
 
-  M.close()
+  M.close({ restore_origin = false })
 
   state.tabpage = current_tab
-  state.origin_win = current_win
+  capture_origin(origin_win)
   state.list_buf = ensure_scratch_buffer(state.list_buf, "erwin-references")
   state.preview_buf = ensure_scratch_buffer(state.preview_buf, "erwin-reference-preview")
 
@@ -356,8 +429,11 @@ function M.open(items)
   render_preview()
 end
 
-function M.close()
+function M.close(opts)
+  opts = opts or {}
   reset_closed_handles()
+  local restore = opts.restore_origin ~= false
+  local origin = state.origin
 
   close_window(state.preview_win)
   close_window(state.list_win)
@@ -367,9 +443,11 @@ function M.close()
   state.tabpage = nil
   state.items = {}
   state.line_items = {}
+  state.origin_win = nil
+  state.origin = nil
 
-  if not in_panel_tab(state.origin_win) then
-    state.origin_win = nil
+  if restore then
+    restore_origin(origin)
   end
 end
 

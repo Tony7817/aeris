@@ -721,6 +721,55 @@ end
 
 local open_quickfix_and_close_on_enter
 
+local function capture_window_origin(win)
+  if win == nil or not vim.api.nvim_win_is_valid(win) then
+    return nil
+  end
+
+  local ok_cursor, cursor = pcall(vim.api.nvim_win_get_cursor, win)
+  local ok_view, view = pcall(vim.api.nvim_win_call, win, vim.fn.winsaveview)
+
+  return {
+    tabpage = vim.api.nvim_win_get_tabpage(win),
+    win = win,
+    bufnr = vim.api.nvim_win_get_buf(win),
+    cursor = ok_cursor and cursor or nil,
+    view = ok_view and view or nil,
+  }
+end
+
+local function restore_window_origin(origin)
+  if type(origin) ~= "table" then
+    return
+  end
+
+  if origin.tabpage ~= nil and vim.api.nvim_tabpage_is_valid(origin.tabpage) then
+    pcall(vim.api.nvim_set_current_tabpage, origin.tabpage)
+  end
+
+  local win = origin.win
+  if win == nil or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  pcall(vim.api.nvim_set_current_win, win)
+
+  if type(origin.bufnr) == "number"
+    and vim.api.nvim_buf_is_valid(origin.bufnr)
+    and vim.api.nvim_win_get_buf(win) ~= origin.bufnr
+  then
+    pcall(vim.api.nvim_win_set_buf, win, origin.bufnr)
+  end
+
+  if type(origin.view) == "table" then
+    pcall(vim.api.nvim_win_call, win, function()
+      vim.fn.winrestview(origin.view)
+    end)
+  elseif type(origin.cursor) == "table" then
+    pcall(vim.api.nvim_win_set_cursor, win, origin.cursor)
+  end
+end
+
 local function jump_to_implementation(opts)
   opts = opts or {}
   local bufnr = vim.api.nvim_get_current_buf()
@@ -776,6 +825,8 @@ local function jump_to_implementation_or_definition()
 end
 
 open_quickfix_and_close_on_enter = function(title, items)
+  local origin = capture_window_origin(vim.api.nvim_get_current_win())
+
   vim.fn.setqflist({}, " ", {
     title = title,
     items = items,
@@ -788,6 +839,14 @@ open_quickfix_and_close_on_enter = function(title, items)
   end
 
   local qf_buf = vim.api.nvim_win_get_buf(qf_win)
+
+  local function close_and_restore()
+    vim.cmd.cclose()
+    vim.schedule(function()
+      restore_window_origin(origin)
+    end)
+  end
+
   vim.keymap.set("n", "<CR>", function()
     local index = vim.api.nvim_win_get_cursor(qf_win)[1]
     vim.cmd("cc " .. index)
@@ -795,6 +854,20 @@ open_quickfix_and_close_on_enter = function(title, items)
   end, {
     buffer = qf_buf,
     desc = "Open quickfix item and close list",
+    nowait = true,
+    silent = true,
+  })
+
+  vim.keymap.set("n", "<Esc>", close_and_restore, {
+    buffer = qf_buf,
+    desc = "Cancel quickfix selection",
+    nowait = true,
+    silent = true,
+  })
+
+  vim.keymap.set("n", "q", close_and_restore, {
+    buffer = qf_buf,
+    desc = "Close quickfix selection",
     nowait = true,
     silent = true,
   })
