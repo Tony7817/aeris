@@ -1,5 +1,5 @@
 local function workspace_name()
-  local cwd = vim.fn.getcwd()
+  local cwd = vim.fn.getcwd(-1, -1)
   if cwd == nil or cwd == "" then
     return "[no-cwd]"
   end
