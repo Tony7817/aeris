@@ -213,6 +213,7 @@ That means:
 | --- | --- |
 | `Space tt` | Open the current terminal, or create one if none exists |
 | `Space tn` | Create a new terminal |
+| `Space th` | Hide the current terminal |
 | `Space tl` | Focus / toggle terminal list |
 | `Esc Esc` | Leave terminal insert mode |
 
@@ -230,12 +231,11 @@ That means:
 | Key | Action |
 | --- | --- |
 | `Space gw` | Open the workspace Git panel |
-| `Space gd` | Open `diffview` |
-| `Space gh` | View current file history |
-| `Space gq` | Close `diffview` |
 | `Space gx` | Exit the Git workspace |
 | `]h` | Next Git change |
 | `[h` | Previous Git change |
+| `]x` | Next Git conflict in `gw` |
+| `[x` | Previous Git conflict in `gw` |
 
 ### LSP and Code Navigation
 

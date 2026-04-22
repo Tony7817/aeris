@@ -211,6 +211,7 @@ Ctrl-o
 | --- | --- |
 | `Space tt` | 打开当前 terminal；如果还没有 terminal，则创建一个 |
 | `Space tn` | 新建 terminal |
+| `Space th` | 隐藏当前 terminal |
 | `Space tl` | 聚焦 / 切换 terminal 列表 |
 | `Esc Esc` | terminal 回到 Normal 模式 |
 
@@ -228,12 +229,11 @@ Ctrl-o
 | 快捷键 | 作用 |
 | --- | --- |
 | `Space gw` | 打开工作区 Git 面板 |
-| `Space gd` | 打开 `diffview` |
-| `Space gh` | 查看当前文件历史 |
-| `Space gq` | 关闭 `diffview` |
 | `Space gx` | 退出 Git 工作区 |
 | `]h` | 下一处 Git 修改 |
 | `[h` | 上一处 Git 修改 |
+| `]x` | 在 `gw` 中跳到下一处 Git 冲突 |
+| `[x` | 在 `gw` 中跳到上一处 Git 冲突 |
 
 ### LSP / 代码导航
 
