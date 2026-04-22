@@ -396,6 +396,23 @@ local function effective_push_state(repo)
   return repo.push or {}
 end
 
+local function repo_has_worktree_changes(repo)
+  return repo.initialized ~= false and not vim.tbl_isempty(repo.files or {})
+end
+
+local function repo_has_pending_push(repo)
+  if repo.initialized == false then
+    return false
+  end
+
+  local push = effective_push_state(repo)
+  return push.push_available == true
+end
+
+local function repo_should_show_publish_action(repo)
+  return repo_has_worktree_changes(repo) or repo_has_pending_push(repo)
+end
+
 local function preview_signature_bits(repo)
   local remote_state = repo_remote_state(repo.path)
   local push = effective_push_state(repo)
@@ -992,41 +1009,6 @@ local function push_command(repo_path)
   return { "git", "push", "--set-upstream", remote, branch }, branch, nil
 end
 
-local function sync_command(repo)
-  if repo.initialized == false then
-    if repo.is_submodule and repo.parent_repo_path and repo.submodule_path then
-      return {
-        "git",
-        "submodule",
-        "update",
-        "--init",
-        "--recursive",
-        "--",
-        repo.submodule_path,
-      }, repo.submodule_path, nil, repo.parent_repo_path
-    end
-
-    return nil, nil, "Submodule not initialized", nil
-  end
-
-  local repo_path = repo.path
-  local branch, err = current_branch(repo_path)
-  if not branch then
-    return nil, nil, err, nil
-  end
-
-  if upstream_ref(repo_path) then
-    return { "git", "pull", "--ff-only" }, branch, nil, repo_path
-  end
-
-  local remote = configured_remote(repo_path, branch)
-  if not remote then
-    return nil, branch, "No git remote configured for this repository", nil
-  end
-
-  return { "git", "fetch", "--prune", remote }, branch, nil, repo_path
-end
-
 local function queue_remote_check(repo, opts)
   if repo.initialized == false then
     set_repo_remote_state(repo.path, {
@@ -1290,7 +1272,7 @@ local function placeholder_buf()
     "",
     "Select a changed file from the left panel to open a unified diff.",
     "Select any repo item on the left to preview full details here.",
-    "Select a repo action to sync, generate a commit message, commit, or push.",
+    "Select the repo action to generate a commit message, commit, and push in one step.",
     "",
     "Controls:",
     "  <CR> / o  open file diff or run action",
@@ -1363,7 +1345,7 @@ local function repo_preview_lines(repo)
   if repo.initialized == false then
     append_preview_section(lines, "State", {
       "This submodule is not initialized.",
-      "Run the Init action to execute git submodule update --init --recursive for it.",
+      "gw only shows publish actions for initialized repositories.",
     })
     return lines
   end
@@ -1412,49 +1394,34 @@ end
 
 local function action_preview(repo, action_name)
   local title_prefix = ({
-    sync = "Sync",
-    push = "Push",
-    commit = "Commit",
-    generate_message = "Commit Message",
+    generate_message_and_push = "Generate Message And Push",
   })[action_name] or "Action"
   local title = title_prefix .. " · " .. repo_title(repo)
   local lines = repo_preview_lines(repo)
   local action_state = repo_action_state(repo.path)
-  local remote_state = repo_remote_state(repo.path)
   local push = effective_push_state(repo)
 
-  if action_name == "sync" then
-    local body = {}
-    if repo.initialized == false then
-      body = {
-        "This action will initialize the submodule in the parent repository.",
-        "It runs git submodule update --init --recursive for the selected submodule.",
-      }
-    else
-      body = {
-        push.has_upstream and "This action runs git pull --ff-only." or "This action fetches the configured remote.",
-      }
-      if push.has_upstream then
-        table.insert(body, string.format("Behind %d  Ahead %d", push.behind or 0, push.ahead or 0))
-      end
+  if action_name == "generate_message_and_push" then
+    local body = {
+      "Run the full publish flow for this repository in one step.",
+    }
+
+    if repo_has_worktree_changes(repo) then
+      vim.list_extend(body, {
+        "gw will generate a Conventional Commit message, commit all current changes, and push the branch.",
+      })
+    elseif push.push_available then
+      vim.list_extend(body, {
+        "The working tree is already clean.",
+        "gw will skip commit generation and only push the pending local branch state.",
+      })
     end
-    if remote_state.checking then
-      table.insert(body, "Remote status check is in progress.")
+
+    if not push.has_upstream then
+      table.insert(body, "If upstream is missing, gw will push with --set-upstream.")
     end
+
     append_preview_section(lines, "Action", body)
-  elseif action_name == "push" then
-    append_preview_section(lines, "Action", {
-      "Push the current branch to its remote.",
-      "If upstream is missing, gw will push with --set-upstream.",
-    })
-  elseif action_name == "commit" then
-    append_preview_section(lines, "Action", {
-      "Commit all current changes in this repository using the generated message below.",
-    })
-  elseif action_name == "generate_message" then
-    append_preview_section(lines, "Action", {
-      "Generate a Conventional Commit message from the current repository changes.",
-    })
   end
 
   if action_state.busy then
@@ -1462,11 +1429,6 @@ local function action_preview(repo, action_name)
   end
   if action_state.error then
     append_preview_section(lines, "Last Error", split_text_lines(action_state.error))
-  end
-  if action_state.commit_message then
-    append_preview_section(lines, "Commit Message", split_text_lines(action_state.commit_message))
-  elseif action_name == "commit" or action_name == "generate_message" then
-    append_preview_section(lines, "Commit Message", { "No generated commit message yet." })
   end
 
   return title, lines, table.concat({
@@ -1476,7 +1438,6 @@ local function action_preview(repo, action_name)
     preview_signature_bits(repo),
     tostring(action_state.busy or ""),
     tostring(action_state.error or ""),
-    tostring(action_state.commit_message or ""),
   }, "\n")
 end
 
@@ -1763,15 +1724,7 @@ end
 
 local function render_repo_actions(lines, repo, depth)
   local action_state = repo_action_state(repo.path)
-  local remote_state = repo_remote_state(repo.path)
-  local push = effective_push_state(repo)
   local indent = repo_content_indent(depth)
-  local has_changes = repo.initialized ~= false and not vim.tbl_isempty(repo.files)
-  local message = action_state.commit_message
-  local show_push = repo.initialized ~= false and push.push_available
-  local push_branch = push.branch or trim(repo.branch)
-  local behind = repo.initialized ~= false and (push.behind or 0) or 0
-  local sync_suffix = ""
 
   if repo.loading then
     add_sidebar_line(lines, {
@@ -1784,19 +1737,11 @@ local function render_repo_actions(lines, repo, depth)
     return
   end
 
-  if remote_state.queued then
-    sync_suffix = "  …"
-  elseif remote_state.checking then
-    sync_suffix = "  …"
-  elseif remote_state.checked and behind > 0 then
-    sync_suffix = "  ↓" .. behind
-  end
-
   if action_state.busy then
     add_sidebar_line(lines, {
       kind = "status",
       repo = repo,
-      focus_target = action_state.busy_focus or "busy",
+      focus_target = action_state.busy_focus or "busy_generate_message_and_push",
       highlight = "Comment",
       status_title = "Current Status",
       status_text = action_state.busy,
@@ -1813,14 +1758,6 @@ local function render_repo_actions(lines, repo, depth)
     }, indent .. "! " .. shorten(action_state.error, 28))
   end
 
-  add_sidebar_line(lines, {
-    kind = "action",
-    repo = repo,
-    action = "sync",
-    focus_target = "sync",
-    highlight = "Special",
-  }, indent .. "[ " .. (repo.initialized == false and "Init" or "Sync") .. " ]" .. sync_suffix)
-
   if repo.initialized == false then
     add_sidebar_line(lines, {
       kind = "status",
@@ -1832,45 +1769,14 @@ local function render_repo_actions(lines, repo, depth)
     return
   end
 
-  if show_push then
+  if repo_should_show_publish_action(repo) and action_state.busy_focus ~= "busy_generate_message_and_push" then
     add_sidebar_line(lines, {
       kind = "action",
       repo = repo,
-      action = "push",
-      focus_target = "push",
-      highlight = "Identifier",
-    }, indent .. "[ Push " .. shorten(push_branch, 18) .. " ]")
-  end
-
-  if message and has_changes then
-    add_sidebar_line(lines, {
-      kind = "action",
-      repo = repo,
-      action = "commit",
-      focus_target = "commit",
-      highlight = "DiffAdd",
-    }, indent .. "[ Commit staged changes ]")
-  end
-
-  if message then
-    add_sidebar_line(lines, {
-      kind = "status",
-      repo = repo,
-      focus_target = "message",
-      highlight = "String",
-      status_title = "Commit Message",
-      status_text = message,
-    }, indent .. "• Commit message ready")
-  end
-
-  if has_changes and action_state.busy_focus ~= "busy_generate_message" then
-    add_sidebar_line(lines, {
-      kind = "action",
-      repo = repo,
-      action = "generate_message",
-      focus_target = "generate_message",
+      action = "generate_message_and_push",
+      focus_target = "generate_message_and_push",
       highlight = "Function",
-    }, indent .. "[ " .. (message and "Regenerate" or "Generate") .. " commit message ]")
+    }, indent .. "[ Generate message and push ]")
   end
 end
 
@@ -1909,8 +1815,8 @@ local function render_repo_block(lines, repo, depth)
         repo = repo,
         highlight = "Comment",
         status_title = "Status",
-        status_text = "No changes",
-      }, repo_content_indent(depth) .. "No changes")
+        status_text = repo_has_pending_push(repo) and "Pending push" or "No changes",
+      }, repo_content_indent(depth) .. (repo_has_pending_push(repo) and "Pending push" or "No changes"))
     elseif not vim.tbl_isempty(repo.files) then
       render_repo_files(lines, repo, depth)
     end
@@ -2015,32 +1921,69 @@ local function restore_placeholder_view()
   configure_main_window(win)
 end
 
-local function show_action_output(title, body_lines, filetype)
+local function refresh_after_repo_action()
   if not is_valid_tab(state.tabpage) then
     return
   end
 
-  local win = in_git_tab(state.main_win) and state.main_win or main_wins()[1]
-  if not win then
-    return
-  end
+  M.refresh({
+    check_status = true,
+    force_status_check = true,
+    check_remote = true,
+    force_remote_check = true,
+  })
+end
 
-  close_extra_main_windows(win)
-  state.main_win = win
-  state.current_diff = nil
-  state.preview_signature = nil
+local function clear_repo_status_cache(repo_path)
+  state.repo_cache[repo_path] = nil
+  set_repo_status_state(repo_path, {
+    checking = false,
+    queued = false,
+    checked = false,
+    error = false,
+  })
+  set_repo_remote_state(repo_path, {
+    checking = false,
+    queued = false,
+    checked = false,
+    error = false,
+    push = false,
+  })
+end
 
-  local lines = { title, "" }
-  vim.list_extend(lines, body_lines or {})
+local function mark_repo_clean(repo)
+  local branch = trim(repo.branch)
+  local clean_push_state = {
+    branch = branch ~= "" and branch or nil,
+    push_available = false,
+    has_upstream = true,
+    ahead = 0,
+    behind = 0,
+  }
 
-  local buf = create_scratch_buffer("git-workspace://output", lines, nil, false)
-  if filetype and filetype ~= "" then
-    vim.bo[buf].filetype = filetype
-  end
-
-  api.nvim_win_set_buf(win, buf)
-  configure_main_window(win)
-  api.nvim_buf_add_highlight(buf, diff_namespace, "Title", 0, 0, -1)
+  state.repo_cache[repo.path] = {
+    branch = branch ~= "" and branch or "(unknown)",
+    summary = "clean",
+    counts = empty_counts(),
+    status_lines = {},
+    files = {},
+    push = clean_push_state,
+    loading = false,
+    status_error = false,
+  }
+  set_repo_status_state(repo.path, {
+    checking = false,
+    queued = false,
+    checked = true,
+    error = false,
+  })
+  set_repo_remote_state(repo.path, {
+    checking = false,
+    queued = false,
+    checked = true,
+    error = false,
+    push = clean_push_state,
+  })
 end
 
 local function run_repo_action(repo, action_name)
@@ -2051,98 +1994,139 @@ local function run_repo_action(repo, action_name)
     return
   end
 
-  if action_name == "generate_message" then
+  if action_name ~= "generate_message_and_push" then
+    notify_result("This action has been replaced by Generate message and push", vim.log.levels.WARN)
+    refresh_after_repo_action()
+    return
+  end
+
+  local has_changes = repo_has_worktree_changes(repo)
+  local needs_push = repo_has_pending_push(repo)
+  if not has_changes and not needs_push then
+    notify_result("No changes to publish in " .. title, vim.log.levels.WARN)
+    return
+  end
+
+  local function fail(message, focus_target, notify_text)
+    clear_repo_status_cache(repo.path)
     set_repo_action_state(repo.path, {
-      busy = "Generating commit message...",
-      busy_focus = "busy_generate_message",
+      busy = false,
+      busy_focus = false,
+      error = trim(message ~= "" and message or "Git publish failed"),
+      info = false,
+    })
+    set_sidebar_focus(repo.path, focus_target or "generate_message_and_push")
+    if notify_text then
+      notify_result(notify_text, vim.log.levels.ERROR)
+    end
+    refresh_after_repo_action()
+  end
+
+  local function run_push_only()
+    local args, branch, err = push_command(repo.path)
+    if not args then
+      fail(err or "No git remote configured for this repository", "generate_message_and_push", err)
+      return
+    end
+
+    set_repo_action_state(repo.path, {
+      busy = "Pushing branch " .. branch .. "...",
+      busy_focus = "busy_generate_message_and_push",
       error = false,
       info = false,
     })
-    set_sidebar_focus(repo.path, "busy_generate_message")
+    set_sidebar_focus(repo.path, "busy_generate_message_and_push")
     schedule_sidebar_refresh()
-
-    local output_file = vim.fn.tempname()
-    local prompt = table.concat({
-      "Write a detailed Conventional Commit message for the current git changes.",
-      "Requirements:",
-      "1. First line must be a specific Conventional Commit subject using feat:, fix:, refactor:, docs:, chore:, test:, or perf: as appropriate.",
-      "2. The subject must clearly say what changed, not generic wording like update or improve.",
-      "3. If there are multiple meaningful changes, add a blank line and then 2-4 concise body lines describing the important modifications.",
-      "4. Output only the commit message text. No code fences, no explanation.",
-    }, "\n")
-    local args = {
-      "codex",
-      "exec",
-      "--ephemeral",
-      "-m",
-      "gpt-5.4-mini",
-      "-c",
-      'model_reasoning_effort="low"',
-      "-s",
-      "read-only",
-      "--color",
-      "never",
-      "-C",
-      repo.path,
-      "--output-last-message",
-      output_file,
-      prompt,
-    }
 
     run_system_async(args, {
       cwd = repo.path,
       text = true,
-    }, function(result)
-      local message = ""
-      if result.code == 0 and vim.fn.filereadable(output_file) == 1 then
-        message = normalize_commit_message(table.concat(vim.fn.readfile(output_file), "\n"))
-      end
-      vim.fn.delete(output_file)
-
-      if result.code ~= 0 or message == "" then
-        set_repo_action_state(repo.path, {
-          busy = false,
-          busy_focus = false,
-          error = trim(result.stderr or result.stdout or "Failed to generate commit message"),
-        })
-        set_sidebar_focus(repo.path, "generate_message")
-        notify_result("Failed to generate commit message for " .. title, vim.log.levels.ERROR)
-        schedule_sidebar_refresh()
+    }, function(push_result)
+      if push_result.code ~= 0 then
+        fail(
+          push_result.stderr or push_result.stdout or "git push failed",
+          "generate_message_and_push",
+          "git push failed for " .. title
+        )
         return
       end
 
-      set_repo_action_state(repo.path, {
-        busy = false,
-        busy_focus = false,
-        commit_message = message,
-        error = false,
-        info = false,
-      })
-      set_sidebar_focus(repo.path, "message")
-      schedule_sidebar_refresh()
+      mark_repo_clean(repo)
+      reset_repo_action_state(repo.path)
+      set_sidebar_focus(repo.path, "repo")
+      restore_placeholder_view()
+      refresh_after_repo_action()
     end)
+  end
+
+  set_repo_action_state(repo.path, {
+    busy = has_changes and "Generating commit message..." or "Preparing push...",
+    busy_focus = "busy_generate_message_and_push",
+    error = false,
+    info = false,
+  })
+  set_sidebar_focus(repo.path, "busy_generate_message_and_push")
+  schedule_sidebar_refresh()
+
+  if not has_changes then
+    run_push_only()
     return
   end
 
-  if action_name == "commit" then
-    local message = trim(action_state.commit_message)
-    if message == "" then
-      notify_result("Generate a commit message first", vim.log.levels.WARN)
-      return
-    end
+  local output_file = vim.fn.tempname()
+  local prompt = table.concat({
+    "Write a detailed Conventional Commit message for the current git changes.",
+    "Requirements:",
+    "1. First line must be a specific Conventional Commit subject using feat:, fix:, refactor:, docs:, chore:, test:, or perf: as appropriate.",
+    "2. The subject must clearly say what changed, not generic wording like update or improve.",
+    "3. If there are multiple meaningful changes, add a blank line and then 2-4 concise body lines describing the important modifications.",
+    "4. Output only the commit message text. No code fences, no explanation.",
+  }, "\n")
+  local args = {
+    "codex",
+    "exec",
+    "--ephemeral",
+    "-m",
+    "gpt-5.4-mini",
+    "-c",
+    'model_reasoning_effort="low"',
+    "-s",
+    "read-only",
+    "--color",
+    "never",
+    "-C",
+    repo.path,
+    "--output-last-message",
+    output_file,
+    prompt,
+  }
 
-    if vim.tbl_isempty(repo.files) then
-      notify_result("No changes to commit in " .. title, vim.log.levels.WARN)
+  run_system_async(args, {
+    cwd = repo.path,
+    text = true,
+  }, function(result)
+    local message = ""
+    if result.code == 0 and vim.fn.filereadable(output_file) == 1 then
+      message = normalize_commit_message(table.concat(vim.fn.readfile(output_file), "\n"))
+    end
+    vim.fn.delete(output_file)
+
+    if result.code ~= 0 or message == "" then
+      fail(
+        result.stderr or result.stdout or "Failed to generate commit message",
+        "generate_message_and_push",
+        "Failed to generate commit message for " .. title
+      )
       return
     end
 
     set_repo_action_state(repo.path, {
       busy = "Running git add && git commit...",
-      busy_focus = "busy_commit",
+      busy_focus = "busy_generate_message_and_push",
       error = false,
       info = false,
     })
-    set_sidebar_focus(repo.path, "busy_commit")
+    set_sidebar_focus(repo.path, "busy_generate_message_and_push")
     schedule_sidebar_refresh()
 
     run_system_async({ "git", "add", "-A" }, {
@@ -2150,14 +2134,7 @@ local function run_repo_action(repo, action_name)
       text = true,
     }, function(add_result)
       if add_result.code ~= 0 then
-        set_repo_action_state(repo.path, {
-          busy = false,
-          busy_focus = false,
-          error = trim(add_result.stderr or add_result.stdout or "git add failed"),
-        })
-        set_sidebar_focus(repo.path, "commit")
-        notify_result("git add failed for " .. title, vim.log.levels.ERROR)
-        schedule_sidebar_refresh()
+        fail(add_result.stderr or add_result.stdout or "git add failed", "generate_message_and_push", "git add failed for " .. title)
         return
       end
 
@@ -2171,141 +2148,18 @@ local function run_repo_action(repo, action_name)
         vim.fn.delete(commit_message_file)
 
         if commit_result.code ~= 0 then
-          set_repo_action_state(repo.path, {
-            busy = false,
-            busy_focus = false,
-            error = trim(commit_result.stderr or commit_result.stdout or "git commit failed"),
-          })
-          set_sidebar_focus(repo.path, "commit")
-          notify_result("git commit failed for " .. title, vim.log.levels.ERROR)
-          schedule_sidebar_refresh()
+          fail(
+            commit_result.stderr or commit_result.stdout or "git commit failed",
+            "generate_message_and_push",
+            "git commit failed for " .. title
+          )
           return
         end
 
-      local sha = run_git({ "git", "rev-parse", "--short", "HEAD" }, repo.path) or ""
-      set_repo_action_state(repo.path, {
-        busy = false,
-        busy_focus = false,
-        commit_message = false,
-        error = false,
-        info = false,
-        last_commit_sha = trim(sha),
-      })
-      set_sidebar_focus(repo.path, "push")
-        show_action_output(
-          "Commit Result · " .. title,
-          vim.split(trim(commit_result.stdout or "Commit created"), "\n", { trimempty = true }),
-          ""
-        )
-        schedule_sidebar_refresh()
+        run_push_only()
       end)
     end)
-    return
-  end
-
-  if action_name == "sync" then
-    local args, branch, err, action_cwd = sync_command(repo)
-    if not args then
-      set_repo_action_state(repo.path, {
-        error = err,
-      })
-      set_sidebar_focus(repo.path, "sync")
-      notify_result(err, vim.log.levels.ERROR)
-      schedule_sidebar_refresh()
-      return
-    end
-
-    set_repo_action_state(repo.path, {
-      busy = repo.initialized == false and ("Initializing submodule " .. title .. "...") or ("Syncing branch " .. branch .. "..."),
-      busy_focus = "busy_sync",
-      error = false,
-      info = false,
-    })
-    set_sidebar_focus(repo.path, "busy_sync")
-    schedule_sidebar_refresh()
-
-    run_system_async(args, {
-      cwd = action_cwd or repo.path,
-      text = true,
-    }, function(sync_result)
-      if sync_result.code ~= 0 then
-        set_repo_action_state(repo.path, {
-          busy = false,
-          busy_focus = false,
-          error = trim(sync_result.stderr or sync_result.stdout or "git sync failed"),
-        })
-        set_sidebar_focus(repo.path, "sync")
-        notify_result("git sync failed for " .. title, vim.log.levels.ERROR)
-        schedule_sidebar_refresh()
-        return
-      end
-
-      set_repo_action_state(repo.path, {
-        busy = false,
-        busy_focus = false,
-        error = false,
-        info = false,
-      })
-      set_repo_remote_state(repo.path, {
-        checking = false,
-        checked = true,
-        error = false,
-      })
-      set_sidebar_focus(repo.path, "sync")
-      restore_placeholder_view()
-      schedule_sidebar_refresh()
-    end)
-    return
-  end
-
-  if action_name == "push" then
-    local args, branch, err = push_command(repo.path)
-    if not args then
-      set_repo_action_state(repo.path, {
-        error = err,
-      })
-      notify_result(err, vim.log.levels.ERROR)
-      schedule_sidebar_refresh()
-      return
-    end
-
-    set_repo_action_state(repo.path, {
-      busy = "Pushing branch " .. branch .. "...",
-      busy_focus = "busy_push",
-      error = false,
-      info = false,
-    })
-    set_sidebar_focus(repo.path, "busy_push")
-    schedule_sidebar_refresh()
-
-    run_system_async(args, {
-      cwd = repo.path,
-      text = true,
-    }, function(push_result)
-      if push_result.code ~= 0 then
-        set_repo_action_state(repo.path, {
-          busy = false,
-          busy_focus = false,
-          error = trim(push_result.stderr or push_result.stdout or "git push failed"),
-        })
-        set_sidebar_focus(repo.path, "push")
-        notify_result("git push failed for " .. title, vim.log.levels.ERROR)
-        schedule_sidebar_refresh()
-        return
-      end
-
-      set_repo_action_state(repo.path, {
-        busy = false,
-        busy_focus = false,
-        error = false,
-        info = false,
-      })
-      reset_repo_action_state(repo.path)
-      set_sidebar_focus(repo.path, "repo")
-      restore_placeholder_view()
-      schedule_sidebar_refresh()
-    end)
-  end
+  end)
 end
 
 close_extra_main_windows = function(keep)
