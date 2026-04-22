@@ -1,4 +1,11 @@
 local map = vim.keymap.set
+local GIT_CHANGE_REPEAT_TIMEOUT_MS = 1200
+local git_change_repeat = {
+  deadline = 0,
+  direction = nil,
+  kind = nil,
+  tabpage = nil,
+}
 
 local function location_state()
   return {
@@ -17,6 +24,63 @@ local function same_location(a, b)
     and a.bufnr == b.bufnr
     and a.cursor[1] == b.cursor[1]
     and a.cursor[2] == b.cursor[2]
+end
+
+local function now_ms()
+  local uv = vim.uv or vim.loop
+  return uv.now()
+end
+
+local function clear_git_change_repeat()
+  git_change_repeat.deadline = 0
+  git_change_repeat.direction = nil
+  git_change_repeat.kind = nil
+  git_change_repeat.tabpage = nil
+end
+
+local function current_git_change_repeat_kind()
+  local name = vim.api.nvim_buf_get_name(0)
+  if type(name) == "string" and vim.startswith(name, "git-workspace://") and name:match("%.diff$") then
+    return "git_workspace_diff"
+  end
+
+  if vim.wo.diff then
+    return "vim_diff"
+  end
+
+  return nil
+end
+
+local function arm_git_change_repeat(direction)
+  local kind = current_git_change_repeat_kind()
+  if kind == nil then
+    clear_git_change_repeat()
+    return
+  end
+
+  git_change_repeat.deadline = now_ms() + GIT_CHANGE_REPEAT_TIMEOUT_MS
+  git_change_repeat.direction = direction
+  git_change_repeat.kind = kind
+  git_change_repeat.tabpage = vim.api.nvim_get_current_tabpage()
+end
+
+local function git_change_repeat_active()
+  if git_change_repeat.deadline <= 0 or now_ms() > git_change_repeat.deadline then
+    clear_git_change_repeat()
+    return false
+  end
+
+  if git_change_repeat.tabpage ~= vim.api.nvim_get_current_tabpage() then
+    clear_git_change_repeat()
+    return false
+  end
+
+  if git_change_repeat.kind ~= current_git_change_repeat_kind() then
+    clear_git_change_repeat()
+    return false
+  end
+
+  return git_change_repeat.direction == "next" or git_change_repeat.direction == "prev"
 end
 
 local function jump_back()
@@ -41,23 +105,25 @@ local function jump_back()
 end
 
 local function goto_git_change(direction)
+  local before = location_state()
   local ok_workspace, git_workspace = pcall(require, "config.git_workspace")
   if ok_workspace and git_workspace.jump_change and git_workspace.jump_change(direction) then
-    return
+    return true
   end
 
   if vim.wo.diff then
     local command = direction == "next" and "]c" or "[c"
     vim.cmd("normal! " .. command)
-    return
+    return not same_location(before, location_state())
   end
 
   local ok, gitsigns = pcall(require, "gitsigns")
   if not ok then
-    return
+    return false
   end
 
   gitsigns.nav_hunk(direction, { target = "all" })
+  return not same_location(before, location_state())
 end
 
 local function goto_git_conflict(direction)
@@ -68,6 +134,29 @@ local function goto_git_conflict(direction)
 
   local command = direction == "next" and "]x" or "[x"
   vim.cmd("normal! " .. command)
+end
+
+local function goto_git_change_with_repeat(direction)
+  if goto_git_change(direction) then
+    arm_git_change_repeat(direction)
+    return
+  end
+
+  clear_git_change_repeat()
+end
+
+local function repeat_git_change_h()
+  if git_change_repeat_active() then
+    if goto_git_change(git_change_repeat.direction) then
+      arm_git_change_repeat(git_change_repeat.direction)
+    else
+      clear_git_change_repeat()
+    end
+    return
+  end
+
+  clear_git_change_repeat()
+  vim.cmd("normal! " .. vim.v.count1 .. "h")
 end
 
 local function refresh_lualine_statusline()
@@ -173,6 +262,7 @@ map("n", "<leader>]", widen_file_tree, { desc = "Widen file tree", nowait = true
 map("n", "<leader>[", narrow_file_tree, { desc = "Narrow file tree", nowait = true })
 map("n", "[", repeat_narrow_file_tree, { expr = true, remap = true, nowait = true, desc = "Repeat narrow file tree" })
 map("n", "]", repeat_widen_file_tree, { expr = true, remap = true, nowait = true, desc = "Repeat widen file tree" })
+map("n", "h", repeat_git_change_h, { nowait = true, silent = true, desc = "Repeat Git change jump" })
 map("n", "<Tab>", "<cmd>BufferLineCycleNext<CR>", { desc = "Next buffer tab" })
 map("n", "<S-Tab>", "<cmd>BufferLineCyclePrev<CR>", { desc = "Previous buffer tab" })
 map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Close buffer" })
@@ -268,10 +358,10 @@ map("n", "[d", vim.diagnostic.goto_prev, { desc = "Previous diagnostic" })
 map("n", "]d", vim.diagnostic.goto_next, { desc = "Next diagnostic" })
 map("n", "<leader>cd", vim.diagnostic.open_float, { desc = "Line diagnostics" })
 map("n", "]h", function()
-  goto_git_change("next")
+  goto_git_change_with_repeat("next")
 end, { desc = "Next Git change" })
 map("n", "[h", function()
-  goto_git_change("prev")
+  goto_git_change_with_repeat("prev")
 end, { desc = "Previous Git change" })
 map("n", "]x", function()
   goto_git_conflict("next")
