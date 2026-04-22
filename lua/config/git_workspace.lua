@@ -55,6 +55,7 @@ local queue_status_check
 local start_next_status_check
 local queue_status_checks
 local set_git_workspace_status_path
+local ensure_layout
 
 local function join(...)
   return table.concat({ ... }, "/")
@@ -453,6 +454,32 @@ local function find_repo_by_path(repos, repo_path)
   end
 
   return nil
+end
+
+local function find_file_in_repo(repo, file_path)
+  for _, file in ipairs(repo and repo.files or {}) do
+    if file.path == file_path then
+      return file
+    end
+  end
+
+  return nil
+end
+
+local function expand_repo_ancestry(repos, repo_path)
+  for _, repo in ipairs(repos or {}) do
+    if repo.path == repo_path then
+      state.repo_expanded[repo.path] = true
+      return true
+    end
+
+    if expand_repo_ancestry(repo.submodules, repo_path) then
+      state.repo_expanded[repo.path] = true
+      return true
+    end
+  end
+
+  return false
 end
 
 local function preview_signature_bits(repo)
@@ -2936,9 +2963,12 @@ function M.goto_definition()
     cursor = source_cursor,
     workspace_root = current.repo_path,
     return_location = {
+      kind = "git_workspace_diff",
       tabpage = state.tabpage,
       win = current.win,
       buf = current.buf,
+      repo_path = current.repo_path,
+      file_path = current.file_path,
       cursor = diff_cursor,
     },
   })
@@ -3402,6 +3432,106 @@ function M.jump_conflict(direction)
   return false
 end
 
+function M.restore_navigation(location)
+  if type(location) ~= "table" then
+    return false
+  end
+
+  if type(location.repo_path) ~= "string" or location.repo_path == "" then
+    return false
+  end
+
+  if type(location.file_path) ~= "string" or location.file_path == "" then
+    return false
+  end
+
+  reset_closed_handles()
+
+  local target_tab = is_valid_tab(location.tabpage) and location.tabpage or state.tabpage
+  if not is_valid_tab(target_tab) then
+    return false
+  end
+
+  state.tabpage = target_tab
+  api.nvim_set_current_tabpage(target_tab)
+  ensure_layout()
+
+  expand_repo_ancestry(state.repos, location.repo_path)
+
+  local repo = find_repo_by_path(state.repos, location.repo_path)
+  if not repo then
+    M.refresh({ check_status = true })
+    repo = find_repo_by_path(state.repos, location.repo_path)
+  end
+
+  if not repo then
+    return false
+  end
+
+  local file = find_file_in_repo(repo, location.file_path)
+  if not file then
+    M.refresh({ check_status = true })
+    repo = find_repo_by_path(state.repos, location.repo_path) or repo
+    file = find_file_in_repo(repo, location.file_path)
+  end
+
+  if not file then
+    return false
+  end
+
+  set_sidebar_focus(repo.path, "file:" .. file.path)
+  M.render()
+
+  local current = state.current_diff
+  if current
+    and current.repo_path == repo.path
+    and current.file_path == file.path
+    and is_valid_win(current.win)
+    and is_valid_buf(current.buf)
+    and in_git_tab(current.win)
+  then
+    state.main_win = current.win
+    if api.nvim_win_get_buf(current.win) ~= current.buf then
+      api.nvim_win_set_buf(current.win, current.buf)
+      configure_main_window(current.win)
+    end
+    api.nvim_set_current_win(current.win)
+    sync_sidebar_file_selection(repo.path, file.path)
+    if type(location.cursor) == "table" then
+      local line = clamped_buf_line(current.buf, location.cursor[1])
+      local col = math.max(math.floor(tonumber(location.cursor[2]) or 0), 0)
+      pcall(api.nvim_win_set_cursor, current.win, { line, col })
+      window_call(current.win, function()
+        vim.cmd("normal! zz")
+      end)
+    end
+    render_sidebar_status()
+    return true
+  end
+
+  if not open_diff(repo, file, {
+    preserve_focus = false,
+    cursor = "first",
+  }) then
+    return false
+  end
+
+  sync_sidebar_file_selection(repo.path, file.path)
+
+  local current = state.current_diff
+  if current and is_valid_win(current.win) and is_valid_buf(current.buf) and type(location.cursor) == "table" then
+    local line = clamped_buf_line(current.buf, location.cursor[1])
+    local col = math.max(math.floor(tonumber(location.cursor[2]) or 0), 0)
+    pcall(api.nvim_win_set_cursor, current.win, { line, col })
+    window_call(current.win, function()
+      vim.cmd("normal! zz")
+    end)
+  end
+
+  render_sidebar_status()
+  return true
+end
+
 function M.close()
   reset_closed_handles()
 
@@ -3436,7 +3566,7 @@ function M.close()
   vim.cmd("tabclose")
 end
 
-local function ensure_layout()
+ensure_layout = function()
   reset_closed_handles()
 
   if is_valid_tab(state.tabpage) then

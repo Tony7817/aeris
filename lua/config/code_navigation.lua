@@ -46,6 +46,17 @@ local function push_return_location(location, entry_location)
 end
 
 local function restore_return_location(location)
+  if type(location) ~= "table" then
+    return false
+  end
+
+  if type(location) == "table" and location.kind == "git_workspace_diff" then
+    local ok, git_workspace = pcall(require, "config.git_workspace")
+    if ok and git_workspace.restore_navigation and git_workspace.restore_navigation(location) then
+      return true
+    end
+  end
+
   if not is_valid_tab(location.tabpage) then
     return false
   end
