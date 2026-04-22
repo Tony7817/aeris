@@ -39,6 +39,14 @@ local function git_workspace_path_visible()
   return git_workspace_selected_path() ~= ""
 end
 
+local function git_workspace_sidebar_focused()
+  if not git_workspace_path_visible() then
+    return false
+  end
+
+  return vim.bo[vim.api.nvim_get_current_buf()].filetype == "erwin-git-workspace"
+end
+
 local function shorten_blame_summary(summary, max_chars)
   summary = vim.trim(summary or "")
   if summary == "" then
@@ -197,7 +205,7 @@ return {
           {
             "filename",
             cond = function()
-              return not telescope_path_visible()
+              return not telescope_path_visible() and not git_workspace_sidebar_focused()
             end,
           },
           {
