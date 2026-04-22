@@ -34,9 +34,45 @@ local function window_filetype(win)
   return vim.bo[api.nvim_win_get_buf(win)].filetype
 end
 
+local function window_buftype(win)
+  if not is_valid_win(win) then
+    return nil
+  end
+
+  return vim.bo[api.nvim_win_get_buf(win)].buftype
+end
+
+local function window_name(win)
+  if not is_valid_win(win) then
+    return nil
+  end
+
+  return api.nvim_buf_get_name(api.nvim_win_get_buf(win))
+end
+
 local function is_primary_window(win)
   local filetype = window_filetype(win)
-  return filetype ~= "NvimTree" and filetype ~= "erwin-terminals"
+  local buftype = window_buftype(win)
+  local name = window_name(win) or ""
+
+  if filetype == "NvimTree"
+    or filetype == "erwin-terminals"
+    or filetype == "erwin-git-workspace"
+    or filetype == "erwin-git-workspace-conflicts"
+    or filetype == "toggleterm"
+  then
+    return false
+  end
+
+  if buftype == "terminal" then
+    return false
+  end
+
+  if vim.startswith(name, "git-workspace://") then
+    return false
+  end
+
+  return true
 end
 
 local function sidebar_is_open()
@@ -102,15 +138,41 @@ local function get_sidebar_line_for_term(term_id)
 end
 
 local function focus_main_window()
+  local function focus_window(win)
+    if not is_valid_win(win) then
+      return false
+    end
+
+    local tabpage = api.nvim_win_get_tabpage(win)
+    if api.nvim_get_current_tabpage() ~= tabpage then
+      api.nvim_set_current_tabpage(tabpage)
+    end
+    api.nvim_set_current_win(win)
+    return true
+  end
+
   if is_valid_win(state.last_main_win) and state.last_main_win ~= state.sidebar_win and is_primary_window(state.last_main_win) then
-    api.nvim_set_current_win(state.last_main_win)
+    focus_window(state.last_main_win)
     return
   end
 
-  for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
-    if (not sidebar_is_open() or win ~= state.sidebar_win) and is_primary_window(win) then
-      state.last_main_win = win
-      api.nvim_set_current_win(win)
+  local current_tabpage = api.nvim_get_current_tabpage()
+  local function scan_tab(tabpage)
+    for _, win in ipairs(api.nvim_tabpage_list_wins(tabpage)) do
+      if (not sidebar_is_open() or win ~= state.sidebar_win) and is_primary_window(win) then
+        state.last_main_win = win
+        return focus_window(win)
+      end
+    end
+    return false
+  end
+
+  if scan_tab(current_tabpage) then
+    return
+  end
+
+  for _, tabpage in ipairs(api.nvim_list_tabpages()) do
+    if tabpage ~= current_tabpage and scan_tab(tabpage) then
       return
     end
   end
