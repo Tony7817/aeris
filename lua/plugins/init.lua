@@ -595,7 +595,11 @@ return {
   {
     "nvim-treesitter/nvim-treesitter",
     lazy = false,
-    build = ":TSUpdate",
+    build = function()
+      if vim.fn.executable("tree-sitter") == 1 then
+        vim.cmd("TSUpdate")
+      end
+    end,
     opts = {
       ensure_installed = {
         "bash",
@@ -628,6 +632,7 @@ return {
     },
     config = function(_, opts)
       local treesitter = require("nvim-treesitter")
+      local can_install_parsers = vim.fn.executable("tree-sitter") == 1
 
       treesitter.setup({
         install_dir = vim.fn.stdpath("data") .. "/site",
@@ -646,9 +651,18 @@ return {
       end
 
       if #missing > 0 then
-        vim.schedule(function()
-          pcall(treesitter.install, missing, { summary = true })
-        end)
+        if can_install_parsers then
+          vim.schedule(function()
+            pcall(treesitter.install, missing, { summary = true })
+          end)
+        else
+          vim.schedule(function()
+            vim.notify_once(
+              "tree-sitter CLI not found; skipping parser installation. Install `tree-sitter` to enable automatic Treesitter parser setup.",
+              vim.log.levels.WARN
+            )
+          end)
+        end
       end
     end,
   },
