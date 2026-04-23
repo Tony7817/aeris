@@ -44,7 +44,7 @@ Base requirements:
 - Neovim `>= 0.12`
 - `git`
 - `ripgrep`
-- a terminal configured with a Nerd Font
+- a terminal configured with `JetBrainsMono Nerd Font` (or `JetBrainsMono Nerd Font Mono`)
 
 Recommended for language tooling:
 
@@ -53,6 +53,16 @@ Recommended for language tooling:
 - `go`
 
 ## Installation
+
+### Step 0: install the recommended Nerd Font
+
+For Homebrew users on macOS or Linux:
+
+```bash
+brew install --cask font-jetbrains-mono-nerd-font
+```
+
+Then set your terminal font to `JetBrainsMono Nerd Font` or `JetBrainsMono Nerd Font Mono`.
 
 ### Option 1: clone directly into `~/.config/nvim`
 

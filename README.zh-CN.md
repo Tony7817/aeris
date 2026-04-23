@@ -44,7 +44,7 @@ Git 工作区界面：
 - Neovim `>= 0.12`
 - `git`
 - `ripgrep`
-- 终端使用 Nerd Font
+- 终端使用 `JetBrainsMono Nerd Font`（或 `JetBrainsMono Nerd Font Mono`）
 
 为了让语言工具真正开箱即用，建议装上：
 
@@ -53,6 +53,16 @@ Git 工作区界面：
 - `go`
 
 ## 安装
+
+### 第 0 步：安装推荐的 Nerd Font
+
+如果你使用 Homebrew（macOS / Linux）：
+
+```bash
+brew install --cask font-jetbrains-mono-nerd-font
+```
+
+安装后，把终端字体设置为 `JetBrainsMono Nerd Font` 或 `JetBrainsMono Nerd Font Mono`。
 
 ### 方式一：直接 clone 到 `~/.config/nvim`
 
