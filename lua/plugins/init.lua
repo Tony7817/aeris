@@ -805,7 +805,7 @@ return {
   },
   {
     "neovim/nvim-lspconfig",
-    event = { "BufReadPre", "BufNewFile" },
+    lazy = false,
     dependencies = {
       "folke/lazydev.nvim",
       "hrsh7th/cmp-nvim-lsp",
