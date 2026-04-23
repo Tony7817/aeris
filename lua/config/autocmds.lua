@@ -3,6 +3,7 @@ local nvim_tree_name_popup = {
   buf = nil,
   win = nil,
 }
+local project_lsp = require("config.project_lsp")
 local workspace_state_path = vim.fn.stdpath("state") .. "/erwin-workspace-files.json"
 local workspace_placeholder_namespace = vim.api.nvim_create_namespace("erwin_workspace_placeholder")
 local nvim_tree_delete_handler_attached = false
@@ -1305,6 +1306,33 @@ vim.api.nvim_create_autocmd("VimEnter", {
         )
       end)
     end
+
+    vim.schedule(function()
+      project_lsp.ensure_go_project(vim.fn.getcwd())
+
+      if vim.api.nvim_buf_is_valid(content_buf) then
+        project_lsp.ensure_go_buffer(content_buf)
+      end
+    end)
+  end,
+})
+
+vim.api.nvim_create_autocmd("DirChanged", {
+  group = group,
+  callback = function()
+    vim.schedule(function()
+      project_lsp.ensure_go_project(vim.fn.getcwd())
+    end)
+  end,
+})
+
+vim.api.nvim_create_autocmd("FileType", {
+  group = group,
+  pattern = { "go", "gomod", "gowork", "gotmpl" },
+  callback = function(args)
+    vim.schedule(function()
+      project_lsp.ensure_go_buffer(args.buf)
+    end)
   end,
 })
 
