@@ -3548,6 +3548,29 @@ function M.restore_navigation(location)
   return true
 end
 
+function M.statusline_branch()
+  reset_closed_handles()
+
+  if not is_valid_tab(state.tabpage) or api.nvim_get_current_tabpage() ~= state.tabpage then
+    return ""
+  end
+
+  local repo = conflict_repo_for_context()
+  if not repo then
+    return ""
+  end
+
+  local branch = vim.trim(repo.branch or "")
+  if branch == "" or branch == "(loading)" then
+    local resolved_branch = current_branch(repo.path)
+    if resolved_branch and resolved_branch ~= "" then
+      branch = resolved_branch
+    end
+  end
+
+  return branch ~= "" and branch or ""
+end
+
 function M.close()
   reset_closed_handles()
 

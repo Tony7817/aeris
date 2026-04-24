@@ -47,6 +47,19 @@ local function git_workspace_sidebar_focused()
   return vim.bo[vim.api.nvim_get_current_buf()].filetype == "erwin-git-workspace"
 end
 
+local function git_workspace_branch()
+  local ok, git_workspace = pcall(require, "config.git_workspace")
+  if not ok or type(git_workspace.statusline_branch) ~= "function" then
+    return ""
+  end
+
+  return git_workspace.statusline_branch() or ""
+end
+
+local function git_workspace_branch_visible()
+  return git_workspace_branch() ~= ""
+end
+
 local function shorten_blame_summary(summary, max_chars)
   summary = vim.trim(summary or "")
   if summary == "" then
@@ -199,7 +212,16 @@ return {
             git_workspace_selected_path,
             cond = git_workspace_path_visible,
           },
-          "branch",
+          {
+            git_workspace_branch,
+            cond = git_workspace_branch_visible,
+          },
+          {
+            "branch",
+            cond = function()
+              return not git_workspace_branch_visible()
+            end,
+          },
         },
         lualine_c = {
           {
