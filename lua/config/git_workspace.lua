@@ -1267,6 +1267,8 @@ local function set_sidebar_cursor(line)
 end
 
 local function sync_sidebar_file_selection(repo_path, file_path)
+  set_sidebar_focus(repo_path, "file:" .. file_path)
+
   for _, entry in ipairs(ordered_file_sidebar_items()) do
     local item = entry.item
     if item.repo and item.file and item.repo.path == repo_path and item.file.path == file_path then
@@ -2680,6 +2682,35 @@ local function parse_conflict_regions(lines)
   return regions
 end
 
+local function conflict_hunk_lines(lines)
+  local hunks = {}
+  for _, region in ipairs(parse_conflict_regions(lines)) do
+    hunks[#hunks + 1] = region.start
+  end
+  return hunks
+end
+
+local function conflict_hunk_lines_for_buf(buf)
+  if not is_valid_buf(buf) then
+    return {}
+  end
+
+  return conflict_hunk_lines(api.nvim_buf_get_lines(buf, 0, -1, false))
+end
+
+local function editable_conflict_absolute_path(repo, file)
+  if not repo or not file or type(file.path) ~= "string" or file.path == "" then
+    return nil
+  end
+
+  local path = join(repo.path, file.path)
+  if vim.fn.filereadable(path) ~= 1 or vim.fn.isdirectory(path) == 1 then
+    return nil
+  end
+
+  return path
+end
+
 local function build_conflict_view(repo, file)
   local lines = {}
   local highlights = {}
@@ -3138,6 +3169,16 @@ local function preferred_diff_cursor_line(buf, hunks, direction)
   return 1
 end
 
+local function refresh_current_conflicts(current)
+  if not current or not current.conflicted or not is_valid_buf(current.buf) then
+    return
+  end
+
+  local conflicts = sanitize_diff_hunks(current.buf, conflict_hunk_lines_for_buf(current.buf))
+  current.conflicts = conflicts
+  current.hunks = conflicts
+end
+
 local function jump_to_hunk(win, hunks, direction)
   if not is_valid_win(win) or #hunks == 0 then
     return false
@@ -3176,6 +3217,33 @@ local function jump_to_hunk(win, hunks, direction)
   return true
 end
 
+local function restore_focus_without_preview(previous_win, fallback_win)
+  if is_valid_win(previous_win) then
+    local suspend_sidebar = previous_win == state.sidebar_win
+    local suspend_conflict = previous_win == state.conflict_win
+    if suspend_sidebar then
+      state.sidebar_preview_suspended = true
+    end
+    if suspend_conflict then
+      state.conflict_preview_suspended = true
+    end
+
+    api.nvim_set_current_win(previous_win)
+
+    if suspend_sidebar then
+      state.sidebar_preview_suspended = false
+    end
+    if suspend_conflict then
+      state.conflict_preview_suspended = false
+    end
+    return
+  end
+
+  if is_valid_win(fallback_win) then
+    api.nvim_set_current_win(fallback_win)
+  end
+end
+
 open_diff = function(repo, file, opts)
   opts = opts or {}
   if not repo or not file or not is_valid_tab(state.tabpage) then
@@ -3192,9 +3260,54 @@ open_diff = function(repo, file, opts)
 
   close_extra_main_windows(win)
   state.main_win = win
+  if api.nvim_get_current_win() ~= win then
+    api.nvim_set_current_win(win)
+  end
 
   local diff_view
   if file.conflicted then
+    local actual_path = editable_conflict_absolute_path(repo, file)
+    if actual_path then
+      local buf = vim.fn.bufadd(actual_path)
+      vim.fn.bufload(buf)
+      local sanitized_hunks = sanitize_diff_hunks(buf, conflict_hunk_lines_for_buf(buf))
+
+      state.current_diff = {
+        absolute_path = actual_path,
+        file_path = file.path,
+        buf = buf,
+        hunks = sanitized_hunks,
+        conflicts = sanitized_hunks,
+        conflicted = true,
+        line_map = nil,
+        repo_path = repo.path,
+        win = win,
+      }
+      state.preview_signature = nil
+
+      api.nvim_win_set_buf(win, buf)
+      apply_diff_mappings(buf)
+      configure_main_window(win)
+      api.nvim_buf_clear_namespace(buf, diff_namespace, 0, -1)
+      apply_diff_scrollbar_marks(buf, win, { scrollbar_marks = {} })
+      api.nvim_win_set_cursor(win, {
+        preferred_diff_cursor_line(buf, sanitized_hunks, opts.cursor),
+        0,
+      })
+      window_call(win, function()
+        vim.cmd("normal! zz")
+      end)
+
+      sync_conflict_selection(repo.path, file.path)
+      render_conflict_sidebar()
+      if opts.preserve_focus then
+        restore_focus_without_preview(previous_win, win)
+      else
+        api.nvim_set_current_win(win)
+      end
+      return true
+    end
+
     diff_view = build_conflict_view(repo, file)
   else
     local output, err = unified_diff_output(repo, file)
@@ -3272,14 +3385,13 @@ open_diff = function(repo, file, opts)
     vim.cmd("normal! zz")
   end)
 
-  if opts.preserve_focus and is_valid_win(previous_win) then
-    api.nvim_set_current_win(previous_win)
+  sync_conflict_selection(repo.path, file.path)
+  render_conflict_sidebar()
+  if opts.preserve_focus then
+    restore_focus_without_preview(previous_win, win)
   else
     api.nvim_set_current_win(win)
   end
-
-  sync_conflict_selection(repo.path, file.path)
-  render_conflict_sidebar()
 
   return true
 end
@@ -3386,6 +3498,7 @@ function M.jump_conflict(direction)
 
   local current = state.current_diff
   if current ~= nil and current.conflicted and is_valid_buf(current.buf) and in_git_tab(current.win) and api.nvim_get_current_win() == current.win then
+    refresh_current_conflicts(current)
     if jump_to_hunk(current.win, current.conflicts or {}, direction) then
       return true
     end
