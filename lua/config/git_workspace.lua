@@ -161,11 +161,27 @@ local function tab_wins()
   return api.nvim_tabpage_list_wins(state.tabpage)
 end
 
+local function is_workspace_aux_window(win)
+  if not is_valid_win(win) then
+    return true
+  end
+
+  if win == state.sidebar_win or win == state.sidebar_status_win or win == state.conflict_win then
+    return true
+  end
+
+  local buf = api.nvim_win_get_buf(win)
+  local filetype = vim.bo[buf].filetype
+  local buftype = vim.bo[buf].buftype
+
+  return filetype == "toggleterm" or buftype == "terminal"
+end
+
 local function main_wins()
   local wins = {}
 
   for _, win in ipairs(tab_wins()) do
-    if win ~= state.sidebar_win and win ~= state.sidebar_status_win and win ~= state.conflict_win then
+    if not is_workspace_aux_window(win) then
       table.insert(wins, win)
     end
   end
