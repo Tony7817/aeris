@@ -1,3 +1,5 @@
+local uv = vim.uv
+
 local function workspace_name()
   local cwd = vim.fn.getcwd(-1, -1)
   if cwd == nil or cwd == "" then
@@ -58,6 +60,72 @@ end
 
 local function git_workspace_branch_visible()
   return git_workspace_branch() ~= ""
+end
+
+local statusline_branch_cache = {}
+local BRANCH_CACHE_TTL_MS = 1500
+
+local function current_workspace_path()
+  local cwd = vim.fn.getcwd(-1, -1)
+  if type(cwd) ~= "string" or cwd == "" then
+    return nil
+  end
+
+  return vim.fs.normalize(vim.fn.fnamemodify(cwd, ":p"))
+end
+
+local function cached_git_branch(path)
+  if type(path) ~= "string" or path == "" then
+    return ""
+  end
+
+  local now_ms = uv.hrtime() / 1000000
+  local cached = statusline_branch_cache[path]
+  if cached and (now_ms - cached.ts) < BRANCH_CACHE_TTL_MS then
+    return cached.branch
+  end
+
+  local branch = ""
+  local result = vim.system({ "git", "-C", path, "branch", "--show-current" }, {
+    text = true,
+  }):wait()
+
+  if result.code == 0 then
+    branch = vim.trim(result.stdout or "")
+  end
+
+  if branch == "" then
+    local detached = vim.system({ "git", "-C", path, "rev-parse", "--short", "HEAD" }, {
+      text = true,
+    }):wait()
+    if detached.code == 0 then
+      branch = vim.trim(detached.stdout or "")
+    end
+  end
+
+  statusline_branch_cache[path] = {
+    branch = branch,
+    ts = now_ms,
+  }
+  return branch
+end
+
+local function statusline_branch()
+  local branch = git_workspace_branch()
+  if branch ~= "" then
+    return branch
+  end
+
+  local cwd = current_workspace_path()
+  if cwd == nil then
+    return ""
+  end
+
+  return cached_git_branch(cwd)
+end
+
+local function statusline_branch_visible()
+  return statusline_branch() ~= ""
 end
 
 local function shorten_blame_summary(summary, max_chars)
@@ -213,14 +281,8 @@ return {
             cond = git_workspace_path_visible,
           },
           {
-            git_workspace_branch,
-            cond = git_workspace_branch_visible,
-          },
-          {
-            "branch",
-            cond = function()
-              return not git_workspace_branch_visible()
-            end,
+            statusline_branch,
+            cond = statusline_branch_visible,
           },
         },
         lualine_c = {
