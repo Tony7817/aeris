@@ -142,10 +142,24 @@ local function shorten_blame_summary(summary, max_chars)
   return vim.fn.strcharpart(summary, 0, max_chars - 1) .. "…"
 end
 
+local function format_blame_time(author_time)
+  if type(author_time) ~= "number" or author_time <= 0 then
+    return nil
+  end
+
+  return os.date("%Y-%m-%d %H:%M", author_time)
+end
+
 local function format_current_line_blame(_, blame_info)
+  local timestamp = format_blame_time(blame_info.author_time)
+  local prefix = blame_info.author
+  if timestamp then
+    prefix = string.format("%s • %s", blame_info.author, timestamp)
+  end
+
   return {
     {
-      string.format(" %s • %s ", blame_info.author, shorten_blame_summary(blame_info.summary, 44)),
+      string.format(" %s • %s ", prefix, shorten_blame_summary(blame_info.summary, 44)),
       "GitSignsCurrentLineBlame",
     },
   }
