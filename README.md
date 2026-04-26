@@ -191,7 +191,8 @@ That means:
 | `Space ]` | Widen file tree |
 | `Space ff` | Find files, default case-insensitive |
 | `Ctrl-s` in `Space ff` | Toggle strict case matching |
-| `Space fg` | Search text globally |
+| `Space fg` | Search text globally, default case-insensitive |
+| `Ctrl-s` in `Space fg` | Toggle strict case matching |
 | `Space fb` | Open buffer list |
 | `Space fr` | Open recent files |
 | `Space fd` | Open diagnostics list |

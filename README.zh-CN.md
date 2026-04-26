@@ -189,7 +189,8 @@ Ctrl-o
 | `Space E` | 聚焦文件树 |
 | `Space ff` | 查找文件，默认忽略大小写 |
 | `Space ff` 中按 `Ctrl-s` | 切换严格大小写匹配 |
-| `Space fg` | 全局搜索文本 |
+| `Space fg` | 全局搜索文本，默认忽略大小写 |
+| `Space fg` 中按 `Ctrl-s` | 切换严格大小写匹配 |
 | `Space fb` | 打开 buffer 列表 |
 | `Space fr` | 打开最近文件列表 |
 | `Space fd` | 打开诊断列表 |
