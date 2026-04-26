@@ -189,7 +189,8 @@ That means:
 | `Space E` | Focus file tree |
 | `Space [` | Narrow file tree |
 | `Space ]` | Widen file tree |
-| `Space ff` | Find files |
+| `Space ff` | Find files, default case-insensitive |
+| `Ctrl-s` in `Space ff` | Toggle strict case matching |
 | `Space fg` | Search text globally |
 | `Space fb` | Open buffer list |
 | `Space fr` | Open recent files |

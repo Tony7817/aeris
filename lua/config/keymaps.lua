@@ -216,6 +216,55 @@ local function attach_telescope_statusline(prompt_bufnr)
   return true
 end
 
+local open_find_files
+
+local function attach_find_files_mappings(prompt_bufnr, strict_case)
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+  attach_telescope_statusline(prompt_bufnr)
+
+  local function reopen_with_case(next_strict_case)
+    local query = action_state.get_current_line()
+    actions.close(prompt_bufnr)
+    vim.schedule(function()
+      open_find_files({
+        strict_case = next_strict_case,
+        default_text = query,
+      })
+    end)
+  end
+
+  local function toggle_case_mode()
+    reopen_with_case(not strict_case)
+  end
+
+  for _, mode in ipairs({ "i", "n" }) do
+    vim.keymap.set(mode, "<C-s>", toggle_case_mode, {
+      buffer = prompt_bufnr,
+      nowait = true,
+      silent = true,
+      desc = strict_case and "Disable strict case matching" or "Enable strict case matching",
+    })
+  end
+
+  return true
+end
+
+open_find_files = function(opts)
+  opts = opts or {}
+  local strict_case = opts.strict_case == true
+
+  require("telescope.builtin").find_files({
+    hidden = true,
+    case_mode = strict_case and "respect_case" or "ignore_case",
+    default_text = opts.default_text,
+    prompt_title = strict_case and "Find Files [Case]" or "Find Files",
+    attach_mappings = function(prompt_bufnr)
+      return attach_find_files_mappings(prompt_bufnr, strict_case)
+    end,
+  })
+end
+
 local function widen_file_tree()
   local tree_width = require("config.tree_width")
   tree_width.widen_with_repeat()
@@ -320,12 +369,7 @@ map("t", "<C-k>", "<Cmd>wincmd k<CR>", { desc = "Focus upper split" })
 map("t", "<C-l>", "<Cmd>wincmd l<CR>", { desc = "Focus right split" })
 
 map("n", "<leader>ff", function()
-  require("telescope.builtin").find_files({
-    hidden = true,
-    attach_mappings = function(prompt_bufnr)
-      return attach_telescope_statusline(prompt_bufnr)
-    end,
-  })
+  open_find_files()
 end, { desc = "Find files" })
 
 map("n", "<leader>fg", function()

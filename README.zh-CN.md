@@ -187,7 +187,8 @@ Ctrl-o
 | --- | --- |
 | `Space e` | 显示 / 隐藏文件树 |
 | `Space E` | 聚焦文件树 |
-| `Space ff` | 查找文件 |
+| `Space ff` | 查找文件，默认忽略大小写 |
+| `Space ff` 中按 `Ctrl-s` | 切换严格大小写匹配 |
 | `Space fg` | 全局搜索文本 |
 | `Space fb` | 打开 buffer 列表 |
 | `Space fr` | 打开最近文件列表 |
