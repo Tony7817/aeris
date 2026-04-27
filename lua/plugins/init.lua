@@ -63,7 +63,9 @@ local function git_workspace_branch_visible()
 end
 
 local statusline_branch_cache = {}
+local blame_commit_branch_cache = {}
 local BRANCH_CACHE_TTL_MS = 1500
+local BLAME_COMMIT_BRANCH_CACHE_TTL_MS = 10000
 
 local function current_workspace_path()
   local cwd = vim.fn.getcwd(-1, -1)
@@ -141,6 +143,105 @@ local function cached_git_branch(path)
   return branch
 end
 
+local function split_trimmed_lines(text)
+  local lines = {}
+  for _, line in ipairs(vim.split(text or "", "\n", { plain = true, trimempty = true })) do
+    local value = vim.trim(line)
+    if value ~= "" then
+      lines[#lines + 1] = value
+    end
+  end
+  return lines
+end
+
+local function list_branches_containing_commit(root, sha, refscope)
+  local result = vim.system({
+    "git",
+    "-C",
+    root,
+    "for-each-ref",
+    "--format=%(refname:short)",
+    "--contains",
+    sha,
+    refscope,
+  }, {
+    text = true,
+  }):wait()
+
+  if result.code ~= 0 then
+    return {}
+  end
+
+  local branches = {}
+  for _, branch in ipairs(split_trimmed_lines(result.stdout)) do
+    if branch ~= "HEAD" and branch ~= "origin/HEAD" then
+      branches[#branches + 1] = branch
+    end
+  end
+
+  return branches
+end
+
+local function branch_distance_to_commit(root, sha, branch)
+  local result = vim.system({
+    "git",
+    "-C",
+    root,
+    "rev-list",
+    "--count",
+    sha .. ".." .. branch,
+  }, {
+    text = true,
+  }):wait()
+
+  if result.code ~= 0 then
+    return math.huge
+  end
+
+  return tonumber(vim.trim(result.stdout or "")) or math.huge
+end
+
+local function pick_nearest_branch(root, sha, branches)
+  local best_branch = ""
+  local best_distance = math.huge
+
+  for _, branch in ipairs(branches) do
+    local distance = branch_distance_to_commit(root, sha, branch)
+    if distance < best_distance or (distance == best_distance and (best_branch == "" or #branch < #best_branch)) then
+      best_branch = branch
+      best_distance = distance
+    end
+  end
+
+  return best_branch
+end
+
+local function cached_blame_commit_branch(root, sha)
+  if type(root) ~= "string" or root == "" or type(sha) ~= "string" or sha == "" then
+    return ""
+  end
+
+  local key = root .. "\n" .. sha
+  local now_ms = uv.hrtime() / 1000000
+  local cached = blame_commit_branch_cache[key]
+  if cached and (now_ms - cached.ts) < BLAME_COMMIT_BRANCH_CACHE_TTL_MS then
+    return cached.branch
+  end
+
+  local branches = list_branches_containing_commit(root, sha, "refs/heads")
+  local branch = pick_nearest_branch(root, sha, branches)
+
+  if branch == "" then
+    branch = pick_nearest_branch(root, sha, list_branches_containing_commit(root, sha, "refs/remotes"))
+  end
+
+  blame_commit_branch_cache[key] = {
+    branch = branch,
+    ts = now_ms,
+  }
+  return branch
+end
+
 local function statusline_branch()
   local branch = git_workspace_branch()
   if branch ~= "" then
@@ -159,20 +260,27 @@ local function statusline_branch_visible()
   return statusline_branch() ~= ""
 end
 
-local function blame_branch()
-  local bufnr = vim.api.nvim_get_current_buf()
-  if vim.api.nvim_buf_is_valid(bufnr) then
-    local name = vim.api.nvim_buf_get_name(bufnr)
-    local root = git_root_for_path(name)
-    if root ~= nil then
-      local branch = cached_git_branch(root)
-      if branch ~= "" then
-        return branch
-      end
-    end
+local function blame_branch(blame_info)
+  if type(blame_info) ~= "table" then
+    return ""
   end
 
-  return statusline_branch()
+  local sha = vim.trim(blame_info.sha or "")
+  if sha == "" or sha:match("^0+$") then
+    return ""
+  end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return ""
+  end
+
+  local root = git_root_for_path(vim.api.nvim_buf_get_name(bufnr))
+  if root == nil then
+    return ""
+  end
+
+  return cached_blame_commit_branch(root, sha)
 end
 
 local function shorten_blame_summary(summary, max_chars)
@@ -199,7 +307,7 @@ end
 
 local function format_current_line_blame(_, blame_info)
   local author = vim.trim(blame_info.author or "")
-  local branch = blame_branch()
+  local branch = blame_branch(blame_info)
   if author ~= "" and branch ~= "" then
     author = string.format("%s(%s)", author, branch)
   end
