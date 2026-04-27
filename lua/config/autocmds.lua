@@ -814,10 +814,52 @@ local function jump_to_implementation(opts)
       return
     end
 
-    open_quickfix_and_close_on_enter(
-      "LSP implementations",
-      vim.lsp.util.locations_to_items(locations, offset_encoding)
-    )
+    local items = {}
+    local seen = {}
+
+    for _, location in ipairs(locations) do
+      local uri = location.uri or location.targetUri
+      local range = location.range or location.targetSelectionRange or location.targetRange
+
+      if uri and range then
+        local key = string.format(
+          "%s:%d:%d:%d:%d",
+          uri,
+          range.start.line,
+          range.start.character,
+          range["end"].line,
+          range["end"].character
+        )
+
+        if not seen[key] then
+          seen[key] = true
+
+          local impl_bufnr = vim.uri_to_bufnr(uri)
+          vim.fn.bufload(impl_bufnr)
+
+          local filename = vim.uri_to_fname(uri)
+          local lnum = range.start.line + 1
+          local col = range.start.character + 1
+          local text = vim.api.nvim_buf_get_lines(impl_bufnr, lnum - 1, lnum, false)[1] or ""
+
+          table.insert(items, {
+            bufnr = impl_bufnr,
+            filename = filename,
+            lnum = lnum,
+            col = col,
+            location = location,
+            text = text,
+          })
+        end
+      end
+    end
+
+    if vim.tbl_isempty(items) then
+      vim.notify("No implementations found", vim.log.levels.INFO)
+      return
+    end
+
+    require("config.references").open(items)
   end)
 end
 
