@@ -46,7 +46,7 @@ opt.scrolloff = 6
 opt.sidescrolloff = 8
 opt.list = true
 opt.listchars = {
-  tab = "> ",
+  tab = "  ",
   trail = ".",
   nbsp = "+",
 }
