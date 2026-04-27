@@ -174,6 +174,28 @@ local function set_telescope_status_path(path)
   refresh_lualine_statusline()
 end
 
+local function open_focused_diagnostic_float()
+  local max_width = math.max(72, math.min(120, vim.o.columns - 8))
+  local max_height = math.max(8, math.floor(vim.o.lines * 0.4))
+  local _, winid = vim.diagnostic.open_float({
+    scope = "line",
+    focusable = true,
+    border = "rounded",
+    source = "if_many",
+    max_width = max_width,
+    max_height = max_height,
+  })
+
+  if not winid or not vim.api.nvim_win_is_valid(winid) then
+    return
+  end
+
+  vim.api.nvim_set_current_win(winid)
+  vim.wo[winid].wrap = true
+  vim.wo[winid].linebreak = true
+  vim.wo[winid].breakindent = true
+end
+
 local function telescope_entry_path(entry)
   if type(entry) ~= "table" then
     return ""
@@ -467,7 +489,7 @@ end, { desc = "Format buffer" })
 
 map("n", "[d", vim.diagnostic.goto_prev, { desc = "Previous diagnostic" })
 map("n", "]d", vim.diagnostic.goto_next, { desc = "Next diagnostic" })
-map("n", "<leader>cd", vim.diagnostic.open_float, { desc = "Line diagnostics" })
+map("n", "<leader>cd", open_focused_diagnostic_float, { desc = "Line diagnostics" })
 map("n", "]h", function()
   goto_git_change_with_repeat("next")
 end, { desc = "Next Git change" })
