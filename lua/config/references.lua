@@ -177,11 +177,13 @@ local function configure_list_window(win, buf)
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
   vim.wo[win].cursorline = true
+  vim.wo[win].cursorlineopt = "line"
   vim.wo[win].signcolumn = "no"
   vim.wo[win].wrap = false
   vim.wo[win].spell = false
   vim.wo[win].winfixheight = true
   vim.wo[win].winfixwidth = false
+  vim.wo[win].winhighlight = "CursorLine:Visual"
   set_winbar(win, "References")
 end
 
