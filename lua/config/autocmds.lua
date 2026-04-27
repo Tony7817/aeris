@@ -842,7 +842,7 @@ open_quickfix_and_close_on_enter = function(title, items)
   local qf_buf = vim.api.nvim_win_get_buf(qf_win)
   vim.wo[qf_win].cursorline = true
   vim.wo[qf_win].cursorlineopt = "line"
-  vim.wo[qf_win].winhighlight = "CursorLine:Visual,QuickFixLine:Visual"
+  vim.wo[qf_win].winhighlight = "CursorLine:Visual,QuickFixLine:Normal"
 
   local function close_and_restore()
     vim.cmd.cclose()
