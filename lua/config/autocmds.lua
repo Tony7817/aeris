@@ -1195,6 +1195,11 @@ local function sync_visible_nvim_tree_to_buffer(bufnr)
   end
 
   local function sync_tree_view()
+    local ok_tree_width, tree_width = pcall(require, "config.tree_width")
+    if ok_tree_width and type(tree_width.apply) == "function" then
+      tree_width.apply()
+    end
+
     local current_tree_win = tree_api.tree.winid()
     if type(current_tree_win) ~= "number" or not vim.api.nvim_win_is_valid(current_tree_win) then
       return
