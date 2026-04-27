@@ -74,6 +74,37 @@ local function current_workspace_path()
   return vim.fs.normalize(vim.fn.fnamemodify(cwd, ":p"))
 end
 
+local function git_root_for_path(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+
+  local target = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  if target == nil or target == "" then
+    return nil
+  end
+
+  local cwd = vim.fn.isdirectory(target) == 1 and target or vim.fs.dirname(target)
+  if type(cwd) ~= "string" or cwd == "" then
+    return nil
+  end
+
+  local result = vim.system({ "git", "-C", cwd, "rev-parse", "--show-toplevel" }, {
+    text = true,
+  }):wait()
+
+  if result.code ~= 0 then
+    return nil
+  end
+
+  local root = vim.trim(result.stdout or "")
+  if root == "" then
+    return nil
+  end
+
+  return vim.fs.normalize(root)
+end
+
 local function cached_git_branch(path)
   if type(path) ~= "string" or path == "" then
     return ""
@@ -128,6 +159,22 @@ local function statusline_branch_visible()
   return statusline_branch() ~= ""
 end
 
+local function blame_branch()
+  local bufnr = vim.api.nvim_get_current_buf()
+  if vim.api.nvim_buf_is_valid(bufnr) then
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    local root = git_root_for_path(name)
+    if root ~= nil then
+      local branch = cached_git_branch(root)
+      if branch ~= "" then
+        return branch
+      end
+    end
+  end
+
+  return statusline_branch()
+end
+
 local function shorten_blame_summary(summary, max_chars)
   summary = vim.trim(summary or "")
   if summary == "" then
@@ -151,10 +198,16 @@ local function format_blame_time(author_time)
 end
 
 local function format_current_line_blame(_, blame_info)
+  local author = vim.trim(blame_info.author or "")
+  local branch = blame_branch()
+  if author ~= "" and branch ~= "" then
+    author = string.format("%s(%s)", author, branch)
+  end
+
   local timestamp = format_blame_time(blame_info.author_time)
-  local prefix = blame_info.author
+  local prefix = author ~= "" and author or (blame_info.author or "")
   if timestamp then
-    prefix = string.format("%s • %s", blame_info.author, timestamp)
+    prefix = string.format("%s • %s", prefix, timestamp)
   end
 
   return {
