@@ -128,6 +128,30 @@ local function current_window_term_id()
   return type(term_id) == "number" and term_id or nil
 end
 
+local function terminal_job_id(buf)
+  local job_id = vim.b[buf].terminal_job_id
+  return type(job_id) == "number" and job_id or nil
+end
+
+local function apply_terminal_paste_mappings(buf)
+  if not is_valid_buf(buf) or vim.bo[buf].buftype ~= "terminal" then
+    return
+  end
+
+  local opts = {
+    buffer = buf,
+    desc = "Paste clipboard to terminal",
+    nowait = true,
+    silent = true,
+  }
+
+  for _, mode in ipairs({ "n", "t" }) do
+    vim.keymap.set(mode, "<D-v>", function()
+      M.paste_clipboard(buf)
+    end, opts)
+  end
+end
+
 local function remember_main_window()
   local win = api.nvim_get_current_win()
   if (sidebar_is_open() and win == state.sidebar_win) or not is_primary_window(win) then
@@ -641,6 +665,26 @@ function M.hide_current()
   vim.schedule(focus_main_window)
 end
 
+function M.paste_clipboard(buf)
+  buf = buf or api.nvim_get_current_buf()
+  if not is_valid_buf(buf) or vim.bo[buf].buftype ~= "terminal" then
+    return false
+  end
+
+  local job_id = terminal_job_id(buf)
+  if not job_id then
+    return false
+  end
+
+  local text = fn.getreg("+")
+  if type(text) ~= "string" or text == "" then
+    return false
+  end
+
+  api.nvim_chan_send(job_id, text)
+  return true
+end
+
 function M.new_terminal()
   local term = terminals().Terminal:new({
     close_on_exit = false,
@@ -742,6 +786,13 @@ function M.close_selected()
     M.render_sidebar()
   end
 end
+
+api.nvim_create_autocmd("TermOpen", {
+  group = group,
+  callback = function(args)
+    apply_terminal_paste_mappings(args.buf)
+  end,
+})
 
 api.nvim_create_autocmd("BufEnter", {
   group = group,
