@@ -261,6 +261,10 @@ local function attach_find_files_mappings(prompt_bufnr, strict_case)
     reopen_with_case(not strict_case)
   end
 
+  local function fuzzy_refine()
+    actions.to_fuzzy_refine(prompt_bufnr)
+  end
+
   for _, mode in ipairs({ "i", "n" }) do
     vim.keymap.set(mode, "<C-s>", toggle_case_mode, {
       buffer = prompt_bufnr,
@@ -308,6 +312,10 @@ local function attach_live_grep_mappings(prompt_bufnr, strict_case)
     reopen_with_case(not strict_case)
   end
 
+  local function fuzzy_refine()
+    actions.to_fuzzy_refine(prompt_bufnr)
+  end
+
   for _, mode in ipairs({ "i", "n" }) do
     vim.keymap.set(mode, "<C-s>", toggle_case_mode, {
       buffer = prompt_bufnr,
@@ -315,7 +323,7 @@ local function attach_live_grep_mappings(prompt_bufnr, strict_case)
       silent = true,
       desc = strict_case and "Disable strict case grep" or "Enable strict case grep",
     })
-    vim.keymap.set(mode, "<C-Space>", actions.to_fuzzy_refine, {
+    vim.keymap.set(mode, "<C-Space>", fuzzy_refine, {
       buffer = prompt_bufnr,
       nowait = true,
       silent = true,
