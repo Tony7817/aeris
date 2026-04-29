@@ -30,15 +30,18 @@ type target struct {
 }
 
 type index struct {
-	Files []string    `json:"files"`
-	Jumps []rangeItem `json:"jumps"`
+	Files   []string    `json:"files"`
+	Jumps   []rangeItem `json:"jumps"`
+	Symbols []rangeItem `json:"symbols"`
 }
 
 type builder struct {
 	visited map[string]bool
 	files   []string
+	lines   map[string][]string
 	defs    map[string]target
 	jumps   []rangeItem
+	symbols []rangeItem
 }
 
 func main() {
@@ -55,6 +58,7 @@ func main() {
 
 	b := &builder{
 		visited: make(map[string]bool),
+		lines:   make(map[string][]string),
 		defs:    make(map[string]target),
 	}
 	if err := b.parseFile(path); err != nil {
@@ -64,8 +68,9 @@ func main() {
 	b.resolveTypeTargets()
 
 	output := index{
-		Files: b.files,
-		Jumps: b.jumps,
+		Files:   b.files,
+		Jumps:   b.jumps,
+		Symbols: b.symbols,
 	}
 	encoder := json.NewEncoder(os.Stdout)
 	if err := encoder.Encode(output); err != nil {
@@ -81,6 +86,9 @@ func (b *builder) parseFile(path string) error {
 	}
 	b.visited[path] = true
 	b.files = append(b.files, path)
+	if err := b.loadLines(path); err != nil {
+		return err
+	}
 
 	parser := goctlparser.New(path, nil)
 	parsed := parser.Parse()
@@ -138,9 +146,9 @@ func (b *builder) addImport(currentFile string, node *goctlast.TokenNode) error 
 		Kind:      "import",
 		Name:      value,
 		File:      currentFile,
-		Line:      node.Token.Position.Line,
-		Column:    node.Token.Position.Column,
-		EndColumn: node.Token.Position.Column + len([]rune(node.Token.Text)),
+		Line:      b.tokenLine(node),
+		Column:    b.tokenColumn(currentFile, node),
+		EndColumn: b.tokenEndColumn(currentFile, node),
 		Target: &target{
 			File:   targetFile,
 			Line:   1,
@@ -162,14 +170,23 @@ func (b *builder) addTypeDefinition(file string, expr *goctlast.TypeExpr) {
 	if name == "" {
 		return
 	}
-	pos := expr.Name.Token.Position
+	line := b.tokenLine(expr.Name)
+	column := b.tokenColumn(file, expr.Name)
 	if _, exists := b.defs[name]; !exists {
 		b.defs[name] = target{
 			File:   file,
-			Line:   pos.Line,
-			Column: pos.Column,
+			Line:   line,
+			Column: column,
 		}
 	}
+	b.symbols = append(b.symbols, rangeItem{
+		Kind:      "type",
+		Name:      name,
+		File:      file,
+		Line:      line,
+		Column:    column,
+		EndColumn: b.tokenEndColumn(file, expr.Name),
+	})
 }
 
 func (b *builder) addServiceReferences(file string, stmt *goctlast.ServiceStmt) {
@@ -188,9 +205,9 @@ func (b *builder) addServiceReferences(file string, stmt *goctlast.ServiceStmt) 
 				Kind:      "handler",
 				Name:      node.Token.Text,
 				File:      file,
-				Line:      node.Token.Position.Line,
-				Column:    node.Token.Position.Column,
-				EndColumn: node.Token.Position.Column + len([]rune(node.Token.Text)),
+				Line:      b.tokenLine(node),
+				Column:    b.tokenColumn(file, node),
+				EndColumn: b.tokenEndColumn(file, node),
 				Group:     group,
 			})
 		}
@@ -214,9 +231,9 @@ func (b *builder) addBodyReference(file string, body *goctlast.BodyStmt) {
 		Kind:      "type",
 		Name:      node.Token.Text,
 		File:      file,
-		Line:      node.Token.Position.Line,
-		Column:    node.Token.Position.Column,
-		EndColumn: node.Token.Position.Column + len([]rune(node.Token.Text)),
+		Line:      b.tokenLine(node),
+		Column:    b.tokenColumn(file, node),
+		EndColumn: b.tokenEndColumn(file, node),
 	})
 }
 
@@ -250,10 +267,98 @@ func (b *builder) addTypeReference(file string, node *goctlast.TokenNode) {
 		Kind:      "type",
 		Name:      node.Token.Text,
 		File:      file,
-		Line:      node.Token.Position.Line,
-		Column:    node.Token.Position.Column,
-		EndColumn: node.Token.Position.Column + len([]rune(node.Token.Text)),
+		Line:      b.tokenLine(node),
+		Column:    b.tokenColumn(file, node),
+		EndColumn: b.tokenEndColumn(file, node),
 	})
+}
+
+func (b *builder) loadLines(file string) error {
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	b.lines[filepath.Clean(file)] = strings.Split(string(content), "\n")
+	return nil
+}
+
+func (b *builder) tokenLine(node *goctlast.TokenNode) int {
+	if node == nil {
+		return 1
+	}
+	return node.Token.Position.Line
+}
+
+func (b *builder) tokenColumn(file string, node *goctlast.TokenNode) int {
+	column, _ := b.tokenRange(file, node)
+	return column
+}
+
+func (b *builder) tokenEndColumn(file string, node *goctlast.TokenNode) int {
+	_, endColumn := b.tokenRange(file, node)
+	return endColumn
+}
+
+func (b *builder) tokenRange(file string, node *goctlast.TokenNode) (int, int) {
+	if node == nil {
+		return 0, 0
+	}
+
+	line := node.Token.Position.Line
+	raw := node.Token.Text
+	if line > 0 {
+		lines := b.lines[filepath.Clean(file)]
+		if line <= len(lines) {
+			if column, endColumn, ok := locateTokenInLine(lines[line-1], raw, node.Token.Position.Column); ok {
+				return column, endColumn
+			}
+			if text := tokenText(node); text != "" && text != raw {
+				if column, endColumn, ok := locateTokenInLine(lines[line-1], text, node.Token.Position.Column); ok {
+					return column, endColumn
+				}
+			}
+		}
+	}
+
+	column := node.Token.Position.Column - 1
+	if column < 0 {
+		column = 0
+	}
+	return column, column + len(raw)
+}
+
+func locateTokenInLine(line, token string, reportedColumn int) (int, int, bool) {
+	if token == "" {
+		return 0, 0, false
+	}
+
+	best := -1
+	bestDistance := 0
+	for offset := 0; ; {
+		index := strings.Index(line[offset:], token)
+		if index < 0 {
+			break
+		}
+		column := offset + index
+		distance := min(abs(column-reportedColumn), abs(column-(reportedColumn-1)))
+		if best < 0 || distance < bestDistance {
+			best = column
+			bestDistance = distance
+		}
+		offset = column + len(token)
+	}
+
+	if best < 0 {
+		return 0, 0, false
+	}
+	return best, best + len(token), true
+}
+
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (b *builder) resolveTypeTargets() {

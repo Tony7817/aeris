@@ -2,6 +2,7 @@ local api = vim.api
 
 local M = {}
 
+local semantic_namespace = api.nvim_create_namespace("aeris_goctl_api_semantic")
 local helper_binary = vim.fn.stdpath("cache") .. "/aeris-goctl-api-indexer"
 local helper_dir = vim.fn.stdpath("config") .. "/tools/goctl-api-indexer"
 local helper_sources = {
@@ -123,6 +124,83 @@ local function find_cursor_jump(index, path, line, col)
     end
   end
   return best
+end
+
+local function find_word_jump(index, path, line)
+  local word = vim.fn.expand("<cword>")
+  if word == "" then
+    return nil
+  end
+
+  for _, item in ipairs(index.jumps or {}) do
+    if normalize_path(item.file) == path and item.line == line and item.name == word then
+      return item
+    end
+  end
+
+  for _, item in ipairs(index.symbols or {}) do
+    if item.kind == "type" and item.name == word then
+      return {
+        kind = "type",
+        name = word,
+        target = {
+          file = item.file,
+          line = item.line,
+          column = item.column,
+        },
+      }
+    end
+  end
+
+  return nil
+end
+
+local function highlight_item(buf, path, item)
+  if item.kind ~= "type" or normalize_path(item.file) ~= path then
+    return
+  end
+
+  local line = tonumber(item.line)
+  local start_col = tonumber(item.column)
+  local end_col = tonumber(item.end_column)
+  if not line or line < 1 or not start_col or not end_col or end_col <= start_col then
+    return
+  end
+
+  pcall(api.nvim_buf_set_extmark, buf, semantic_namespace, line - 1, start_col, {
+    end_col = end_col,
+    hl_group = "Type",
+    priority = 130,
+  })
+end
+
+function M.apply_semantic_highlights(buf)
+  buf = buf or api.nvim_get_current_buf()
+  if not api.nvim_buf_is_valid(buf) then
+    return false
+  end
+
+  api.nvim_buf_clear_namespace(buf, semantic_namespace, 0, -1)
+  local path = normalize_path(api.nvim_buf_get_name(buf))
+  if path == "" then
+    return false
+  end
+
+  local index = read_index(path)
+  if not index then
+    return false
+  end
+
+  for _, item in ipairs(index.symbols or {}) do
+    highlight_item(buf, path, item)
+  end
+  for _, item in ipairs(index.jumps or {}) do
+    if item.target then
+      highlight_item(buf, path, item)
+    end
+  end
+
+  return true
 end
 
 local function open_target(target)
@@ -277,6 +355,9 @@ function M.goto_definition()
   local cursor = api.nvim_win_get_cursor(0)
   local item = find_cursor_jump(index, path, cursor[1], cursor[2])
   if not item then
+    item = find_word_jump(index, path, cursor[1])
+  end
+  if not item then
     vim.notify("No goctl api target under cursor", vim.log.levels.WARN)
     return false
   end
@@ -298,8 +379,10 @@ function M.goto_definition()
 end
 
 function M.setup()
+  local group = api.nvim_create_augroup("aeris_goctl_api", { clear = true })
+
   api.nvim_create_autocmd("FileType", {
-    group = api.nvim_create_augroup("aeris_goctl_api", { clear = true }),
+    group = group,
     pattern = "goctlapi",
     callback = function(args)
       vim.b[args.buf].current_syntax = nil
@@ -308,6 +391,21 @@ function M.setup()
         buffer = args.buf,
         desc = "Go to goctl api definition",
       })
+      vim.schedule(function()
+        M.apply_semantic_highlights(args.buf)
+      end)
+    end,
+  })
+
+  api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    pattern = "*.api",
+    callback = function(args)
+      if vim.bo[args.buf].filetype == "goctlapi" then
+        vim.schedule(function()
+          M.apply_semantic_highlights(args.buf)
+        end)
+      end
     end,
   })
 end
