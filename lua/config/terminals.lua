@@ -133,12 +133,26 @@ local function terminal_job_id(buf)
   return type(job_id) == "number" and job_id or nil
 end
 
-local function apply_terminal_paste_mappings(buf)
+local function send_terminal_text(buf, text)
+  if not is_valid_buf(buf) or vim.bo[buf].buftype ~= "terminal" then
+    return false
+  end
+
+  local job_id = terminal_job_id(buf)
+  if not job_id then
+    return false
+  end
+
+  api.nvim_chan_send(job_id, text)
+  return true
+end
+
+local function apply_terminal_input_mappings(buf)
   if not is_valid_buf(buf) or vim.bo[buf].buftype ~= "terminal" then
     return
   end
 
-  local opts = {
+  local paste_opts = {
     buffer = buf,
     desc = "Paste clipboard to terminal",
     nowait = true,
@@ -148,8 +162,20 @@ local function apply_terminal_paste_mappings(buf)
   for _, mode in ipairs({ "n", "t" }) do
     vim.keymap.set(mode, "<D-v>", function()
       M.paste_clipboard(buf)
-    end, opts)
+    end, paste_opts)
   end
+
+  local send_upper_d = function()
+    send_terminal_text(buf, "D")
+  end
+  local d_opts = {
+    buffer = buf,
+    desc = "Send uppercase D to terminal",
+    nowait = true,
+    silent = true,
+  }
+  vim.keymap.set("t", "D", send_upper_d, d_opts)
+  vim.keymap.set("t", "<S-D>", send_upper_d, d_opts)
 end
 
 local function remember_main_window()
@@ -667,22 +693,13 @@ end
 
 function M.paste_clipboard(buf)
   buf = buf or api.nvim_get_current_buf()
-  if not is_valid_buf(buf) or vim.bo[buf].buftype ~= "terminal" then
-    return false
-  end
-
-  local job_id = terminal_job_id(buf)
-  if not job_id then
-    return false
-  end
 
   local text = fn.getreg("+")
   if type(text) ~= "string" or text == "" then
     return false
   end
 
-  api.nvim_chan_send(job_id, text)
-  return true
+  return send_terminal_text(buf, text)
 end
 
 function M.new_terminal()
@@ -790,7 +807,16 @@ end
 api.nvim_create_autocmd("TermOpen", {
   group = group,
   callback = function(args)
-    apply_terminal_paste_mappings(args.buf)
+    vim.schedule(function()
+      apply_terminal_input_mappings(args.buf)
+    end)
+  end,
+})
+
+api.nvim_create_autocmd("TermEnter", {
+  group = group,
+  callback = function(args)
+    apply_terminal_input_mappings(args.buf)
   end,
 })
 
