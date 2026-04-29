@@ -1305,7 +1305,11 @@ vim.api.nvim_create_autocmd("VimEnter", {
       vim.wo[tree_win].winfixwidth = true
     end
 
-    if vim.api.nvim_buf_get_name(content_buf) ~= "" then
+    local function content_buffer_is_named()
+      return vim.api.nvim_buf_is_valid(content_buf) and vim.api.nvim_buf_get_name(content_buf) ~= ""
+    end
+
+    if content_buffer_is_named() then
       tree_api.tree.find_file({
         buf = content_buf,
         focus = false,
@@ -1335,9 +1339,11 @@ vim.api.nvim_create_autocmd("VimEnter", {
           vim.api.nvim_set_current_win(content_win)
         end
       end)
-    elseif vim.api.nvim_buf_get_name(content_buf) ~= "" then
+    elseif content_buffer_is_named() then
       vim.schedule(function()
-        ensure_buffer_highlighting(content_buf)
+        if vim.api.nvim_buf_is_valid(content_buf) then
+          ensure_buffer_highlighting(content_buf)
+        end
         if vim.api.nvim_win_is_valid(tree_win) then
           vim.api.nvim_set_current_win(tree_win)
         end
