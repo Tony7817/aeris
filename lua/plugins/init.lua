@@ -390,6 +390,27 @@ return {
     "nvim-tree/nvim-tree.lua",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     opts = {
+      on_attach = function(bufnr)
+        local api = require("nvim-tree.api")
+        api.map.on_attach.default(bufnr)
+
+        pcall(vim.keymap.del, "n", "y", { buffer = bufnr })
+        vim.keymap.set("n", "yn", api.fs.copy.filename, {
+          buffer = bufnr,
+          desc = "Copy Name",
+          silent = true,
+        })
+        vim.keymap.set("n", "yp", api.fs.copy.absolute_path, {
+          buffer = bufnr,
+          desc = "Copy Absolute Path",
+          silent = true,
+        })
+        vim.keymap.set("n", "yP", api.fs.copy.relative_path, {
+          buffer = bufnr,
+          desc = "Copy Relative Path",
+          silent = true,
+        })
+      end,
       actions = {
         open_file = {
           quit_on_open = false,
