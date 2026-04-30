@@ -302,6 +302,7 @@ return {
         lualine_c = {
           {
             "filename",
+            path = 1,
             cond = function()
               return not telescope_path_visible() and not git_workspace_sidebar_focused()
             end,
