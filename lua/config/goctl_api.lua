@@ -25,6 +25,13 @@ local function file_mtime(path)
   return stat and stat.mtime and stat.mtime.sec or 0
 end
 
+local function list_or_empty(value)
+  if type(value) == "table" then
+    return value
+  end
+  return {}
+end
+
 local function helper_needs_build()
   local binary_mtime = file_mtime(helper_binary)
   if binary_mtime == 0 then
@@ -93,7 +100,11 @@ local function read_index(path)
     return nil, "failed to decode goctl api index"
   end
 
-  for _, file in ipairs(decoded.files or {}) do
+  decoded.files = list_or_empty(decoded.files)
+  decoded.jumps = list_or_empty(decoded.jumps)
+  decoded.symbols = list_or_empty(decoded.symbols)
+
+  for _, file in ipairs(decoded.files) do
     mtime = math.max(mtime, file_mtime(file))
   end
 
