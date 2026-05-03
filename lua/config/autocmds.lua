@@ -1382,6 +1382,38 @@ vim.api.nvim_create_autocmd("DirChanged", {
   end,
 })
 
+vim.api.nvim_create_autocmd("VimEnter", {
+  group = group,
+  callback = function(args)
+    if args.file == "" then
+      return
+    end
+
+    local path = vim.fn.fnamemodify(args.file, ":p")
+    if vim.fn.isdirectory(path) ~= 1 then
+      return
+    end
+
+    vim.schedule(function()
+      project_lsp.ensure_go_project(path)
+    end)
+  end,
+})
+
+vim.api.nvim_create_autocmd("BufReadPost", {
+  group = group,
+  pattern = { "*.go", "go.mod", "go.work", "*.gotmpl" },
+  callback = function(args)
+    vim.schedule(function()
+      if project_lsp.ensure_go_buffer(args.buf) then
+        return
+      end
+
+      project_lsp.ensure_go_project(vim.api.nvim_buf_get_name(args.buf))
+    end)
+  end,
+})
+
 vim.api.nvim_create_autocmd("FileType", {
   group = group,
   pattern = { "go", "gomod", "gowork", "gotmpl" },
