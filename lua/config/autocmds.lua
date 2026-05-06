@@ -1305,6 +1305,14 @@ vim.api.nvim_create_autocmd("VimEnter", {
       vim.wo[tree_win].winfixwidth = true
     end
 
+    if vim.api.nvim_win_is_valid(content_win) then
+      local ok_tree_lib, tree_lib = pcall(require, "nvim-tree.lib")
+      if ok_tree_lib then
+        -- The startup placeholder is nofile, so nvim-tree's picker excludes it.
+        tree_lib.target_winid = content_win
+      end
+    end
+
     local function content_buffer_is_named()
       return vim.api.nvim_buf_is_valid(content_buf) and vim.api.nvim_buf_get_name(content_buf) ~= ""
     end
