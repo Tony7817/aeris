@@ -131,13 +131,6 @@ local function open_workspace_file(path, cursor, workspace_root)
       vim.wo[tree_win].winfixwidth = true
     end
 
-    tree_api.tree.find_file({
-      buf = bufnr,
-      focus = false,
-      open = false,
-      update_root = true,
-    })
-
     if api.nvim_win_is_valid(content_win) then
       api.nvim_set_current_win(content_win)
     end
