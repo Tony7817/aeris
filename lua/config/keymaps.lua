@@ -209,6 +209,33 @@ local function telescope_entry_path(entry)
   return vim.fn.fnamemodify(path, ":p")
 end
 
+local function reveal_file_in_nvim_tree(path)
+  if type(path) ~= "string" or path == "" then
+    return
+  end
+
+  path = vim.fn.fnamemodify(path, ":p")
+
+  vim.schedule(function()
+    local ok, tree_api = pcall(require, "nvim-tree.api")
+    if not ok then
+      return
+    end
+
+    local tree_win = tree_api.tree.winid()
+    if type(tree_win) ~= "number" or not vim.api.nvim_win_is_valid(tree_win) then
+      return
+    end
+
+    tree_api.tree.find_file({
+      buf = path,
+      focus = false,
+      open = false,
+      update_root = false,
+    })
+  end)
+end
+
 local function attach_telescope_statusline(prompt_bufnr)
   local action_state = require("telescope.actions.state")
   local picker = action_state.get_current_picker(prompt_bufnr)
@@ -241,7 +268,7 @@ end
 local open_find_files
 local open_live_grep
 
-local function attach_find_files_mappings(prompt_bufnr, strict_case)
+local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
   attach_telescope_statusline(prompt_bufnr)
@@ -263,6 +290,23 @@ local function attach_find_files_mappings(prompt_bufnr, strict_case)
 
   local function fuzzy_refine()
     actions.to_fuzzy_refine(prompt_bufnr)
+  end
+
+  local function select_and_reveal(action)
+    return function()
+      local path = telescope_entry_path(action_state.get_selected_entry())
+      action(prompt_bufnr)
+      reveal_file_in_nvim_tree(path)
+    end
+  end
+
+  if type(picker_map) == "function" then
+    for _, mode in ipairs({ "i", "n" }) do
+      picker_map(mode, "<CR>", select_and_reveal(actions.select_default))
+      picker_map(mode, "<C-x>", select_and_reveal(actions.select_horizontal))
+      picker_map(mode, "<C-v>", select_and_reveal(actions.select_vertical))
+      picker_map(mode, "<C-t>", select_and_reveal(actions.select_tab))
+    end
   end
 
   for _, mode in ipairs({ "i", "n" }) do
@@ -289,8 +333,8 @@ open_find_files = function(opts)
     case_mode = strict_case and "respect_case" or "ignore_case",
     default_text = opts.default_text,
     prompt_title = strict_case and "Find Files [Case]" or "Find Files",
-    attach_mappings = function(prompt_bufnr)
-      return attach_find_files_mappings(prompt_bufnr, strict_case)
+    attach_mappings = function(prompt_bufnr, picker_map)
+      return attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
     end,
   })
 end
