@@ -1255,10 +1255,24 @@ vim.api.nvim_create_autocmd("VimEnter", {
       return vim.api.nvim_buf_is_valid(content_buf) and vim.api.nvim_buf_get_name(content_buf) ~= ""
     end
 
+    local function reveal_content_buffer_in_tree()
+      if not content_buffer_is_named() then
+        return
+      end
+
+      tree_api.tree.find_file({
+        buf = content_buf,
+        focus = false,
+        open = false,
+        update_root = false,
+      })
+    end
+
     if workspace_entry then
       vim.schedule(function()
         ensure_buffer_highlighting(content_buf)
         restore_workspace_cursor(content_win, content_buf, workspace_entry.cursor)
+        reveal_content_buffer_in_tree()
 
         local focus = workspace_entry.focus or { kind = "file" }
         if focus.kind == "tree" and vim.api.nvim_win_is_valid(tree_win) then
@@ -1272,6 +1286,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
         if vim.api.nvim_buf_is_valid(content_buf) then
           ensure_buffer_highlighting(content_buf)
         end
+        reveal_content_buffer_in_tree()
         if vim.api.nvim_win_is_valid(tree_win) then
           vim.api.nvim_set_current_win(tree_win)
         end
