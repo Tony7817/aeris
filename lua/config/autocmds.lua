@@ -834,7 +834,11 @@ local function jump_to_implementation(opts)
     local clients = lsp_clients_for(bufnr, "textDocument/implementation")
 
     if vim.tbl_isempty(clients) then
-      jump_to_definition()
+      if opts.fallback_to_definition then
+        jump_to_definition()
+      else
+        vim.notify("No implementation LSP client available", vim.log.levels.INFO)
+      end
       return
     end
 
@@ -930,7 +934,7 @@ local function jump_to_implementation_or_definition()
   jump_to_implementation({ fallback_to_definition = true })
 end
 
-vim.keymap.set("n", "gi", jump_to_implementation_or_definition, { desc = "Go to implementation or definition" })
+vim.keymap.set("n", "gi", jump_to_implementation, { desc = "Go to implementation" })
 
 open_quickfix_and_close_on_enter = function(title, items)
   local origin = capture_window_origin(vim.api.nvim_get_current_win())
@@ -1575,7 +1579,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
     map("n", "<F12>", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
     map("n", "gd", vim.lsp.buf.definition, vim.tbl_extend("force", opts, { desc = "Go to definition" }))
     map("n", "gr", jump_to_references, vim.tbl_extend("force", opts, { desc = "Go to references" }))
-    map("n", "gi", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
+    map("n", "gi", jump_to_implementation, vim.tbl_extend("force", opts, { desc = "Go to implementation" }))
     map("n", "K", vim.lsp.buf.hover, vim.tbl_extend("force", opts, { desc = "Hover documentation" }))
     map("n", "<leader>ds", vim.lsp.buf.document_symbol, vim.tbl_extend("force", opts, { desc = "Document symbols" }))
   end,
