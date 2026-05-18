@@ -771,101 +771,166 @@ local function restore_window_origin(origin)
   end
 end
 
-local function jump_to_implementation(opts)
-  opts = opts or {}
-  local bufnr = vim.api.nvim_get_current_buf()
-  local params = vim.lsp.util.make_position_params()
-  local clients = vim.lsp.get_clients({ bufnr = bufnr, method = "textDocument/implementation" })
+local function lsp_clients_for(bufnr, method)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return {}
+  end
 
-  if vim.tbl_isempty(clients) then
-    if opts.fallback_to_definition then
-      vim.lsp.buf.definition()
+  return vim.lsp.get_clients({ bufnr = bufnr, method = method })
+end
+
+local function wait_for_lsp_navigation_client(bufnr, opts, callback)
+  local started_at = vim.uv.now()
+  local done = false
+
+  local function has_client()
+    return #lsp_clients_for(bufnr, "textDocument/implementation") > 0
+      or (opts.fallback_to_definition and #lsp_clients_for(bufnr, "textDocument/definition") > 0)
+  end
+
+  local function finish()
+    if done then
+      return
     end
+
+    done = true
+    callback()
+  end
+
+  if has_client() then
+    finish()
     return
   end
 
-  vim.lsp.buf_request_all(bufnr, "textDocument/implementation", params, function(results)
-    local locations = {}
-    local offset_encoding = "utf-8"
+  pcall(project_lsp.ensure_go_buffer, bufnr)
 
-    for _, result in pairs(results) do
-      if result.result then
-        offset_encoding = result.client and result.client.offset_encoding or offset_encoding
+  local function poll()
+    if has_client() or vim.uv.now() - started_at >= 2500 then
+      finish()
+      return
+    end
 
-        if vim.islist(result.result) then
-          vim.list_extend(locations, result.result)
+    vim.defer_fn(poll, 100)
+  end
+
+  vim.defer_fn(poll, 100)
+end
+
+local function jump_to_implementation(opts)
+  opts = opts or {}
+  local bufnr = vim.api.nvim_get_current_buf()
+  local source_win = vim.api.nvim_get_current_win()
+
+  local function jump_to_definition()
+    if opts.fallback_to_definition then
+      if vim.api.nvim_win_is_valid(source_win) then
+        vim.api.nvim_set_current_win(source_win)
+      end
+      vim.lsp.buf.definition()
+    end
+  end
+
+  local function request_implementations()
+    local clients = lsp_clients_for(bufnr, "textDocument/implementation")
+
+    if vim.tbl_isempty(clients) then
+      jump_to_definition()
+      return
+    end
+
+    local function params(client)
+      local win = vim.api.nvim_win_is_valid(source_win) and source_win or 0
+      return vim.lsp.util.make_position_params(win, client.offset_encoding)
+    end
+
+    vim.lsp.buf_request_all(bufnr, "textDocument/implementation", params, function(results)
+      local locations = {}
+      local offset_encoding = "utf-8"
+
+      for _, result in pairs(results) do
+        if result.result then
+          local client = result.context and vim.lsp.get_client_by_id(result.context.client_id)
+          offset_encoding = client and client.offset_encoding or offset_encoding
+
+          if vim.islist(result.result) then
+            vim.list_extend(locations, result.result)
+          else
+            table.insert(locations, result.result)
+          end
+        end
+      end
+
+      if vim.tbl_isempty(locations) then
+        if opts.fallback_to_definition then
+          jump_to_definition()
         else
-          table.insert(locations, result.result)
+          vim.notify("No implementations found", vim.log.levels.INFO)
+        end
+        return
+      end
+
+      if #locations == 1 then
+        vim.lsp.util.show_document(locations[1], offset_encoding, { reuse_win = true })
+        return
+      end
+
+      local items = {}
+      local seen = {}
+
+      for _, location in ipairs(locations) do
+        local uri = location.uri or location.targetUri
+        local range = location.range or location.targetSelectionRange or location.targetRange
+
+        if uri and range then
+          local key = string.format(
+            "%s:%d:%d:%d:%d",
+            uri,
+            range.start.line,
+            range.start.character,
+            range["end"].line,
+            range["end"].character
+          )
+
+          if not seen[key] then
+            seen[key] = true
+
+            local impl_bufnr = vim.uri_to_bufnr(uri)
+            vim.fn.bufload(impl_bufnr)
+
+            local filename = vim.uri_to_fname(uri)
+            local lnum = range.start.line + 1
+            local col = range.start.character + 1
+            local text = vim.api.nvim_buf_get_lines(impl_bufnr, lnum - 1, lnum, false)[1] or ""
+
+            table.insert(items, {
+              bufnr = impl_bufnr,
+              filename = filename,
+              lnum = lnum,
+              col = col,
+              location = location,
+              text = text,
+            })
+          end
         end
       end
-    end
 
-    if vim.tbl_isempty(locations) then
-      if opts.fallback_to_definition then
-        vim.lsp.buf.definition()
-      else
+      if vim.tbl_isempty(items) then
         vim.notify("No implementations found", vim.log.levels.INFO)
+        return
       end
-      return
-    end
 
-    if #locations == 1 then
-      vim.lsp.util.show_document(locations[1], offset_encoding, { reuse_win = true })
-      return
-    end
+      require("config.references").open(items)
+    end)
+  end
 
-    local items = {}
-    local seen = {}
-
-    for _, location in ipairs(locations) do
-      local uri = location.uri or location.targetUri
-      local range = location.range or location.targetSelectionRange or location.targetRange
-
-      if uri and range then
-        local key = string.format(
-          "%s:%d:%d:%d:%d",
-          uri,
-          range.start.line,
-          range.start.character,
-          range["end"].line,
-          range["end"].character
-        )
-
-        if not seen[key] then
-          seen[key] = true
-
-          local impl_bufnr = vim.uri_to_bufnr(uri)
-          vim.fn.bufload(impl_bufnr)
-
-          local filename = vim.uri_to_fname(uri)
-          local lnum = range.start.line + 1
-          local col = range.start.character + 1
-          local text = vim.api.nvim_buf_get_lines(impl_bufnr, lnum - 1, lnum, false)[1] or ""
-
-          table.insert(items, {
-            bufnr = impl_bufnr,
-            filename = filename,
-            lnum = lnum,
-            col = col,
-            location = location,
-            text = text,
-          })
-        end
-      end
-    end
-
-    if vim.tbl_isempty(items) then
-      vim.notify("No implementations found", vim.log.levels.INFO)
-      return
-    end
-
-    require("config.references").open(items)
-  end)
+  wait_for_lsp_navigation_client(bufnr, opts, request_implementations)
 end
 
 local function jump_to_implementation_or_definition()
   jump_to_implementation({ fallback_to_definition = true })
 end
+
+vim.keymap.set("n", "gi", jump_to_implementation_or_definition, { desc = "Go to implementation or definition" })
 
 open_quickfix_and_close_on_enter = function(title, items)
   local origin = capture_window_origin(vim.api.nvim_get_current_win())
@@ -1510,7 +1575,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
     map("n", "<F12>", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
     map("n", "gd", vim.lsp.buf.definition, vim.tbl_extend("force", opts, { desc = "Go to definition" }))
     map("n", "gr", jump_to_references, vim.tbl_extend("force", opts, { desc = "Go to references" }))
-    map("n", "gi", jump_to_implementation, vim.tbl_extend("force", opts, { desc = "Go to implementation" }))
+    map("n", "gi", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
     map("n", "K", vim.lsp.buf.hover, vim.tbl_extend("force", opts, { desc = "Hover documentation" }))
     map("n", "<leader>ds", vim.lsp.buf.document_symbol, vim.tbl_extend("force", opts, { desc = "Document symbols" }))
   end,
