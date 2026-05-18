@@ -128,6 +128,19 @@ local function statusline_branch_visible()
   return statusline_branch() ~= ""
 end
 
+local function macro_recording()
+  local reg = vim.fn.reg_recording()
+  if reg == "" then
+    return ""
+  end
+
+  return "recording @" .. reg
+end
+
+local function macro_recording_visible()
+  return macro_recording() ~= ""
+end
+
 local function shorten_blame_summary(summary, max_chars)
   summary = vim.trim(summary or "")
   if summary == "" then
@@ -312,7 +325,16 @@ return {
             cond = telescope_path_visible,
           },
         },
-        lualine_x = { "encoding", "fileformat", "filetype" },
+        lualine_x = {
+          {
+            macro_recording,
+            cond = macro_recording_visible,
+            color = { gui = "bold" },
+          },
+          "encoding",
+          "fileformat",
+          "filetype",
+        },
         lualine_y = { "progress" },
         lualine_z = { "location" },
       },

@@ -43,6 +43,18 @@ local function is_path_in_cwd(path, cwd)
   return path == cwd or vim.startswith(path, cwd .. "/")
 end
 
+vim.api.nvim_create_autocmd({ "RecordingEnter", "RecordingLeave" }, {
+  group = group,
+  callback = function()
+    vim.schedule(function()
+      local ok, lualine = pcall(require, "lualine")
+      if ok then
+        lualine.refresh({ place = { "statusline" } })
+      end
+    end)
+  end,
+})
+
 local function read_workspace_state()
   if vim.fn.filereadable(workspace_state_path) ~= 1 then
     return {}
