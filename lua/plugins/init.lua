@@ -416,6 +416,18 @@ return {
         local api = require("nvim-tree.api")
         api.map.on_attach.default(bufnr)
 
+        local function copy_directory_path()
+          local node = api.tree.get_node_under_cursor()
+          local path = node.absolute_path
+          if node.nodes == nil then
+            path = vim.fs.dirname(path)
+          end
+
+          vim.fn.setreg("+", path)
+          vim.fn.setreg('"', path)
+          vim.notify("Copied " .. path .. " to system clipboard!", vim.log.levels.INFO)
+        end
+
         pcall(vim.keymap.del, "n", "y", { buffer = bufnr })
         vim.keymap.set("n", "yn", api.fs.copy.filename, {
           buffer = bufnr,
@@ -427,9 +439,14 @@ return {
           desc = "Copy Absolute Path",
           silent = true,
         })
-        vim.keymap.set("n", "yP", api.fs.copy.relative_path, {
+        vim.keymap.set("n", "yr", api.fs.copy.relative_path, {
           buffer = bufnr,
           desc = "Copy Relative Path",
+          silent = true,
+        })
+        vim.keymap.set("n", "yd", copy_directory_path, {
+          buffer = bufnr,
+          desc = "Copy Directory Path",
           silent = true,
         })
       end,
