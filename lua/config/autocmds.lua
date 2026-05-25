@@ -6,8 +6,11 @@ local nvim_tree_name_popup = {
 local project_lsp = require("config.project_lsp")
 local workspace_state_path = vim.fn.stdpath("state") .. "/erwin-workspace-files.json"
 local workspace_placeholder_namespace = vim.api.nvim_create_namespace("erwin_workspace_placeholder")
+local workspace_placeholder_filetype = "erwin-workspace-home"
 local nvim_tree_delete_handler_attached = false
 local ensure_buffer_highlighting
+local ensuring_workspace_placeholder = false
+local window_cwd
 
 local function normalize_path(path)
   if path == nil or path == "" then
@@ -387,7 +390,7 @@ local function apply_workspace_placeholder(bufnr, cwd)
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = true
   vim.bo[bufnr].readonly = false
-  vim.bo[bufnr].filetype = "erwin-workspace-home"
+  vim.bo[bufnr].filetype = workspace_placeholder_filetype
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, workspace_placeholder_lines(cwd))
   vim.api.nvim_buf_clear_namespace(bufnr, workspace_placeholder_namespace, 0, -1)
   vim.api.nvim_buf_add_highlight(bufnr, workspace_placeholder_namespace, "Title", 0, 1, -1)
@@ -397,6 +400,17 @@ local function apply_workspace_placeholder(bufnr, cwd)
   vim.bo[bufnr].modifiable = false
   vim.bo[bufnr].readonly = true
   vim.bo[bufnr].modified = false
+
+  vim.keymap.set("n", "<leader>bd", "<Nop>", {
+    buffer = bufnr,
+    desc = "Keep workspace placeholder",
+    silent = true,
+  })
+  vim.keymap.set("n", "<leader>q", "<Nop>", {
+    buffer = bufnr,
+    desc = "Keep workspace placeholder",
+    silent = true,
+  })
 end
 
 local function show_workspace_placeholder(win, cwd)
@@ -410,7 +424,143 @@ local function show_workspace_placeholder(win, cwd)
   return buf
 end
 
-local function window_cwd(win)
+local function is_workspace_placeholder(bufnr)
+  return vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].filetype == workspace_placeholder_filetype
+end
+
+local function is_sidebar_buffer(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+
+  local filetype = vim.bo[bufnr].filetype
+  return filetype == "NvimTree" or filetype == "erwin-terminals" or filetype == "erwin-git-workspace" or filetype == "qf"
+end
+
+local function is_workspace_page_buffer(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) or is_workspace_placeholder(bufnr) or is_sidebar_buffer(bufnr) then
+    return false
+  end
+
+  if not vim.api.nvim_buf_is_loaded(bufnr) or not vim.bo[bufnr].buflisted then
+    return false
+  end
+
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  if name == "" or vim.startswith(name, "git://") or vim.startswith(name, "git-workspace://") then
+    return false
+  end
+
+  return vim.bo[bufnr].buftype == ""
+end
+
+local function has_workspace_page_buffer()
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if is_workspace_page_buffer(bufnr) then
+      return true
+    end
+  end
+
+  return false
+end
+
+local function can_reuse_for_workspace_placeholder(bufnr)
+  return vim.api.nvim_buf_is_valid(bufnr)
+    and not is_sidebar_buffer(bufnr)
+    and vim.api.nvim_buf_get_name(bufnr) == ""
+    and vim.bo[bufnr].buftype == ""
+    and not vim.bo[bufnr].modified
+end
+
+local function workspace_placeholder_window()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    if is_workspace_placeholder(bufnr) then
+      return win
+    end
+  end
+
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    if can_reuse_for_workspace_placeholder(bufnr) then
+      return win
+    end
+  end
+
+  return nil
+end
+
+local function nvim_tree_window()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].filetype == "NvimTree" then
+      return win
+    end
+  end
+
+  return nil
+end
+
+local function create_content_window_after_tree()
+  local tree_win = nvim_tree_window()
+  if tree_win == nil or not vim.api.nvim_win_is_valid(tree_win) then
+    return nil
+  end
+
+  local current_win = vim.api.nvim_get_current_win()
+  local tree_width = vim.api.nvim_win_get_width(tree_win)
+  vim.api.nvim_set_current_win(tree_win)
+  vim.cmd("rightbelow vertical new")
+
+  if vim.api.nvim_win_is_valid(tree_win) then
+    vim.api.nvim_win_set_width(tree_win, tree_width)
+    vim.wo[tree_win].winfixwidth = true
+  end
+
+  local win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(current_win) and current_win ~= tree_win then
+    vim.api.nvim_set_current_win(current_win)
+  end
+
+  return win
+end
+
+local function ensure_workspace_placeholder()
+  if ensuring_workspace_placeholder or vim.v.exiting ~= vim.NIL or #vim.api.nvim_list_uis() == 0 then
+    return
+  end
+
+  if has_workspace_page_buffer() then
+    return
+  end
+
+  ensuring_workspace_placeholder = true
+
+  local current_win = vim.api.nvim_get_current_win()
+  local win = workspace_placeholder_window() or create_content_window_after_tree()
+  if win ~= nil and vim.api.nvim_win_is_valid(win) then
+    local bufnr = vim.api.nvim_win_get_buf(win)
+    if not is_workspace_placeholder(bufnr) then
+      if can_reuse_for_workspace_placeholder(bufnr) then
+        apply_workspace_placeholder(bufnr, window_cwd(win))
+      else
+        show_workspace_placeholder(win, window_cwd(win))
+      end
+    end
+  end
+
+  if vim.api.nvim_win_is_valid(current_win) then
+    vim.api.nvim_set_current_win(current_win)
+  end
+
+  ensuring_workspace_placeholder = false
+end
+
+local function schedule_workspace_placeholder_check()
+  vim.schedule(ensure_workspace_placeholder)
+end
+
+window_cwd = function(win)
   local cwd
   if vim.api.nvim_win_is_valid(win) then
     vim.api.nvim_win_call(win, function()
@@ -1451,6 +1601,11 @@ vim.api.nvim_create_autocmd("FileType", {
 vim.api.nvim_create_autocmd("VimLeavePre", {
   group = group,
   callback = save_workspace_file,
+})
+
+vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout", "WinClosed" }, {
+  group = group,
+  callback = schedule_workspace_placeholder_check,
 })
 
 vim.api.nvim_create_autocmd("InsertLeave", {
