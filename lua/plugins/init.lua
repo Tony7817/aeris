@@ -416,6 +416,42 @@ return {
         local api = require("nvim-tree.api")
         api.map.on_attach.default(bufnr)
 
+        local function show_deleted_node()
+          vim.api.nvim_echo({ { "文件已被删除", "WarningMsg" } }, false, {})
+          api.tree.reload()
+        end
+
+        local function node_exists(node)
+          if node == nil then
+            return false
+          end
+
+          local path = node.absolute_path
+          return type(path) ~= "string" or path == "" or uv.fs_stat(path) ~= nil
+        end
+
+        local function open_existing_node(action)
+          return function()
+            local node = api.tree.get_node_under_cursor()
+            if not node_exists(node) then
+              show_deleted_node()
+              return
+            end
+
+            action(node)
+          end
+        end
+
+        local function map_open(lhs, action, desc)
+          vim.keymap.set("n", lhs, open_existing_node(action), {
+            buffer = bufnr,
+            desc = "nvim-tree: " .. desc,
+            noremap = true,
+            silent = true,
+            nowait = true,
+          })
+        end
+
         local function copy_directory_path()
           local node = api.tree.get_node_under_cursor()
           local path = node.absolute_path
@@ -449,6 +485,16 @@ return {
           desc = "Copy Directory Path",
           silent = true,
         })
+        map_open("<CR>", api.node.open.edit, "Open")
+        map_open("o", api.node.open.edit, "Open")
+        map_open("<2-LeftMouse>", api.node.open.edit, "Open")
+        map_open("O", api.node.open.no_window_picker, "Open: No Window Picker")
+        map_open("<C-e>", api.node.open.replace_tree_buffer, "Open: In Place")
+        map_open("<C-t>", api.node.open.tab, "Open: New Tab")
+        map_open("<C-v>", api.node.open.vertical, "Open: Vertical Split")
+        map_open("<C-x>", api.node.open.horizontal, "Open: Horizontal Split")
+        map_open("<Tab>", api.node.open.preview, "Open Preview")
+        map_open("L", api.node.open.toggle_group_empty, "Toggle Group Empty")
       end,
       actions = {
         open_file = {
