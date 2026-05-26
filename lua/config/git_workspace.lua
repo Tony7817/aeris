@@ -342,12 +342,15 @@ local function repo_status_snapshot(repos)
 
   local function append_repo(repo)
     local push = repo.push or {}
+    local parent_status_file = repo.parent_status_file or {}
     chunks[#chunks + 1] = table.concat({
       repo.path,
       tostring(repo.initialized ~= false),
       repo.display_name or repo.name or "",
       repo.branch or "",
       repo.summary or "",
+      parent_status_file.code or "",
+      parent_status_file.path or "",
       tostring(push.push_available or false),
       tostring(push.has_upstream or false),
       tostring(push.ahead or 0),
@@ -395,6 +398,30 @@ end
 
 local function repo_title(repo)
   return trim((repo and (repo.display_name or repo.name)) or "")
+end
+
+local function status_code_label(file)
+  local code = trim(file and file.code or "")
+  return code ~= "" and code or "changed"
+end
+
+local function repo_header_status(repo)
+  local parts = {}
+  local summary = trim(repo and repo.summary or "")
+
+  if summary ~= "" and summary ~= "clean" and summary ~= "loading git status..." then
+    table.insert(parts, summary)
+  end
+
+  if repo and repo.parent_status_file then
+    table.insert(parts, "submodule " .. status_code_label(repo.parent_status_file))
+  end
+
+  if vim.tbl_isempty(parts) then
+    return ""
+  end
+
+  return "  " .. table.concat(parts, " · ")
 end
 
 local function repo_action_state(repo_path)
@@ -686,7 +713,7 @@ local function submodule_definitions(repo_path)
   return definitions
 end
 
-local function uninitialized_submodule_entry(parent_repo_path, definition)
+local function uninitialized_submodule_entry(parent_repo_path, definition, parent_status_file)
   return {
     name = vim.fs.basename(definition.relpath),
     display_name = definition.relpath,
@@ -712,14 +739,26 @@ local function uninitialized_submodule_entry(parent_repo_path, definition)
     initialized = false,
     parent_repo_path = parent_repo_path,
     submodule_path = definition.relpath,
+    parent_status_file = parent_status_file,
   }
 end
 
-local function collect_submodule_entries(repo_path, seen)
+local function parent_status_for_submodule(parent_files, relpath)
+  for _, file in ipairs(parent_files or {}) do
+    if file.path == relpath then
+      return file
+    end
+  end
+
+  return nil
+end
+
+local function collect_submodule_entries(repo_path, seen, parent_files)
   local submodules = {}
 
   for _, definition in ipairs(submodule_definitions(repo_path)) do
     if not seen[definition.path] then
+      local parent_status_file = parent_status_for_submodule(parent_files, definition.relpath)
       if is_git_repo(definition.path) then
         table.insert(submodules, repo_entry(definition.path, {
           display_name = definition.relpath,
@@ -727,10 +766,11 @@ local function collect_submodule_entries(repo_path, seen)
           initialized = true,
           parent_repo_path = repo_path,
           submodule_path = definition.relpath,
+          parent_status_file = parent_status_file,
         }, seen))
       else
         seen[definition.path] = true
-        table.insert(submodules, uninitialized_submodule_entry(repo_path, definition))
+        table.insert(submodules, uninitialized_submodule_entry(repo_path, definition, parent_status_file))
       end
     end
   end
@@ -840,11 +880,12 @@ repo_entry = function(path, opts, seen)
     status_lines = status_data.status_lines,
     files = status_data.files,
     push = status_data.push,
-    submodules = collect_submodule_entries(path, seen),
+    submodules = collect_submodule_entries(path, seen, status_data.files),
     is_submodule = opts.is_submodule == true,
     initialized = opts.initialized ~= false,
     parent_repo_path = opts.parent_repo_path,
     submodule_path = opts.submodule_path,
+    parent_status_file = opts.parent_status_file,
     loading = status_data.loading == true,
     status_error = status_data.status_error == true,
   }
@@ -934,6 +975,7 @@ start_next_status_check = function()
     "--porcelain=v1",
     "--branch",
     "--untracked-files=all",
+    "--ignore-submodules=none",
   }, {
     cwd = repo_path,
     text = true,
@@ -1450,6 +1492,12 @@ local function repo_preview_lines(repo)
   if repo.is_submodule then
     table.insert(lines, "Submodule path: " .. (repo.submodule_path or repo_title(repo)))
   end
+  if repo.parent_status_file then
+    table.insert(
+      lines,
+      string.format("Parent submodule entry: [%s] %s", status_code_label(repo.parent_status_file), repo.parent_status_file.path)
+    )
+  end
 
   if repo.loading then
     append_preview_section(lines, "Status", {
@@ -1495,7 +1543,15 @@ local function repo_preview_lines(repo)
   if not vim.tbl_isempty(repo.submodules or {}) then
     local submodule_lines = {}
     for _, submodule in ipairs(repo.submodules or {}) do
-      table.insert(submodule_lines, string.format("- %s  %s", repo_title(submodule), submodule.branch or "(unknown)"))
+      table.insert(
+        submodule_lines,
+        string.format(
+          "- %s  %s%s",
+          repo_title(submodule),
+          submodule.branch or "(unknown)",
+          repo_header_status(submodule)
+        )
+      )
     end
     append_preview_section(lines, "Submodules", submodule_lines)
   end
@@ -2176,7 +2232,7 @@ local function render_repo_block(lines, repo, depth)
     kind = "repo",
     repo = repo,
     focus_target = "repo",
-  }, string.format("%s%s %s  %s", repo_header_indent(depth), expanded and "▾" or "▸", label, repo.branch))
+  }, string.format("%s%s %s  %s%s", repo_header_indent(depth), expanded and "▾" or "▸", label, repo.branch, repo_header_status(repo)))
 
   if expanded then
     render_repo_actions(lines, repo, depth)
