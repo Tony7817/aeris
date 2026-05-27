@@ -941,6 +941,78 @@ local function lsp_clients_for(bufnr, method)
   return vim.lsp.get_clients({ bufnr = bufnr, method = method })
 end
 
+local function try_start_lsp_navigation(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) or vim.bo[bufnr].buftype ~= "" then
+    return
+  end
+
+  pcall(project_lsp.ensure_go_buffer, bufnr)
+
+  if vim.bo[bufnr].filetype == "" then
+    return
+  end
+
+  vim.api.nvim_buf_call(bufnr, function()
+    vim.api.nvim_exec_autocmds("FileType", {
+      buffer = bufnr,
+      modeline = false,
+    })
+  end)
+end
+
+local function jump_to_definition()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local source_win = vim.api.nvim_get_current_win()
+  local started_at = vim.uv.now()
+
+  local function request_definition()
+    if vim.api.nvim_win_is_valid(source_win) and vim.api.nvim_win_get_buf(source_win) == bufnr then
+      vim.api.nvim_set_current_win(source_win)
+    elseif vim.api.nvim_get_current_buf() ~= bufnr then
+      return
+    end
+
+    vim.lsp.buf.definition()
+  end
+
+  local function fallback_definition()
+    if vim.api.nvim_win_is_valid(source_win) and vim.api.nvim_win_get_buf(source_win) == bufnr then
+      vim.api.nvim_set_current_win(source_win)
+    elseif vim.api.nvim_get_current_buf() ~= bufnr then
+      return
+    end
+
+    pcall(vim.cmd, "normal! gd")
+  end
+
+  if #lsp_clients_for(bufnr, "textDocument/definition") > 0 then
+    request_definition()
+    return
+  end
+
+  try_start_lsp_navigation(bufnr)
+
+  local function poll()
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+
+    if #lsp_clients_for(bufnr, "textDocument/definition") > 0 then
+      request_definition()
+      return
+    end
+
+    if vim.uv.now() - started_at >= 2500 then
+      fallback_definition()
+      return
+    end
+
+    vim.defer_fn(poll, 100)
+  end
+
+  poll()
+end
+
 local function wait_for_lsp_navigation_client(bufnr, opts, callback)
   local started_at = vim.uv.now()
   local done = false
@@ -1096,6 +1168,7 @@ local function jump_to_implementation_or_definition()
   jump_to_implementation({ fallback_to_definition = true })
 end
 
+vim.keymap.set("n", "gd", jump_to_definition, { desc = "Go to definition" })
 vim.keymap.set("n", "gi", jump_to_implementation, { desc = "Go to implementation" })
 
 open_quickfix_and_close_on_enter = function(title, items)
@@ -1744,7 +1817,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
     local opts = { buffer = event.buf }
 
     map("n", "<F12>", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
-    map("n", "gd", vim.lsp.buf.definition, vim.tbl_extend("force", opts, { desc = "Go to definition" }))
+    map("n", "gd", jump_to_definition, vim.tbl_extend("force", opts, { desc = "Go to definition" }))
     map("n", "gr", jump_to_references, vim.tbl_extend("force", opts, { desc = "Go to references" }))
     map("n", "gi", jump_to_implementation, vim.tbl_extend("force", opts, { desc = "Go to implementation" }))
     map("n", "K", vim.lsp.buf.hover, vim.tbl_extend("force", opts, { desc = "Hover documentation" }))
