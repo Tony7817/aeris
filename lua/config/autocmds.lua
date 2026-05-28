@@ -10,6 +10,7 @@ local workspace_placeholder_filetype = "erwin-workspace-home"
 local nvim_tree_delete_handler_attached = false
 local ensure_buffer_highlighting
 local ensuring_workspace_placeholder = false
+local workspace_ui_started = false
 local window_cwd
 
 local function normalize_path(path)
@@ -1486,137 +1487,158 @@ vim.api.nvim_create_autocmd("ColorScheme", {
   callback = apply_ui_highlights,
 })
 
-vim.api.nvim_create_autocmd("VimEnter", {
-  group = group,
-  once = true,
-  callback = function(args)
-    if #vim.api.nvim_list_uis() == 0 then
-      return
-    end
+local function workspace_start_file(args)
+  if type(args) == "table" and type(args.file) == "string" and args.file ~= "" then
+    return args.file
+  end
 
-    local ok, tree_api = pcall(require, "nvim-tree.api")
-    if not ok then
-      return
-    end
-    attach_nvim_tree_delete_handler()
+  local first_arg = vim.fn.argv(0)
+  return type(first_arg) == "string" and first_arg or ""
+end
 
-    local path = args.file ~= "" and vim.fn.fnamemodify(args.file, ":p") or ""
-    local is_directory = path ~= "" and vim.fn.isdirectory(path) == 1
-    local has_args = vim.fn.argc() > 0
-    local should_restore_workspace_file = not has_args or is_directory
+local function open_workspace_ui(args)
+  if workspace_ui_started or #vim.api.nvim_list_uis() == 0 then
+    return
+  end
 
-    if is_directory then
-      vim.cmd.cd(path)
-      vim.cmd.enew()
-    end
+  local ok, tree_api = pcall(require, "nvim-tree.api")
+  if not ok then
+    return
+  end
+  workspace_ui_started = true
+  attach_nvim_tree_delete_handler()
 
-    local content_win = vim.api.nvim_get_current_win()
-    local content_buf = vim.api.nvim_get_current_buf()
+  local file = workspace_start_file(args)
+  local path = file ~= "" and vim.fn.fnamemodify(file, ":p") or ""
+  local is_directory = path ~= "" and vim.fn.isdirectory(path) == 1
+  local has_args = vim.fn.argc() > 0
+  local should_restore_workspace_file = not has_args or is_directory
 
-    if not has_args or is_directory then
-      apply_workspace_placeholder(content_buf, vim.fn.getcwd())
-    end
+  if is_directory then
+    vim.cmd.cd(path)
+    vim.cmd.enew()
+  end
 
-    local workspace_entry = nil
-    local workspace_restore_file = nil
-    local workspace_restore_error = nil
+  local content_win = vim.api.nvim_get_current_win()
+  local content_buf = vim.api.nvim_get_current_buf()
 
-    if should_restore_workspace_file then
-      workspace_entry = last_workspace_location(vim.fn.getcwd())
-      if workspace_entry then
-        workspace_restore_file = workspace_entry.file
-        vim.api.nvim_set_current_win(content_win)
-        local restored, restored_buf, err = try_restore_workspace_file(content_win, workspace_entry.file)
-        if restored then
-          content_buf = restored_buf
-        else
-          workspace_restore_error = err
-          workspace_entry = nil
-          apply_workspace_placeholder(content_buf, vim.fn.getcwd())
-        end
-      end
-    end
+  if not has_args or is_directory then
+    apply_workspace_placeholder(content_buf, vim.fn.getcwd())
+  end
 
-    local tree_width = require("config.tree_width").get()
-    vim.cmd(string.format("topleft vertical %dnew", tree_width))
-    local tree_win = vim.api.nvim_get_current_win()
-    tree_api.tree.open({ current_window = true, path = vim.fn.getcwd() })
-    vim.cmd(string.format("vertical resize %d", tree_width))
+  local workspace_entry = nil
+  local workspace_restore_file = nil
+  local workspace_restore_error = nil
 
-    if vim.api.nvim_win_is_valid(tree_win) then
-      vim.wo[tree_win].winfixwidth = true
-    end
-
-    if vim.api.nvim_win_is_valid(content_win) then
-      local ok_tree_lib, tree_lib = pcall(require, "nvim-tree.lib")
-      if ok_tree_lib then
-        -- The startup placeholder is nofile, so nvim-tree's picker excludes it.
-        tree_lib.target_winid = content_win
-      end
-    end
-
-    local function content_buffer_is_named()
-      return vim.api.nvim_buf_is_valid(content_buf) and vim.api.nvim_buf_get_name(content_buf) ~= ""
-    end
-
-    local function reveal_content_buffer_in_tree()
-      if not content_buffer_is_named() then
-        return
-      end
-
-      tree_api.tree.find_file({
-        buf = content_buf,
-        focus = false,
-        open = false,
-        update_root = false,
-      })
-    end
-
+  if should_restore_workspace_file then
+    workspace_entry = last_workspace_location(vim.fn.getcwd())
     if workspace_entry then
-      vim.schedule(function()
-        ensure_buffer_highlighting(content_buf)
-        restore_workspace_cursor(content_win, content_buf, workspace_entry.cursor)
-        reveal_content_buffer_in_tree()
+      workspace_restore_file = workspace_entry.file
+      vim.api.nvim_set_current_win(content_win)
+      local restored, restored_buf, err = try_restore_workspace_file(content_win, workspace_entry.file)
+      if restored then
+        content_buf = restored_buf
+      else
+        workspace_restore_error = err
+        workspace_entry = nil
+        apply_workspace_placeholder(content_buf, vim.fn.getcwd())
+      end
+    end
+  end
 
-        local focus = workspace_entry.focus or { kind = "file" }
-        if focus.kind == "tree" and vim.api.nvim_win_is_valid(tree_win) then
-          vim.api.nvim_set_current_win(tree_win)
-        elseif vim.api.nvim_win_is_valid(content_win) then
-          vim.api.nvim_set_current_win(content_win)
-        end
-      end)
-    elseif content_buffer_is_named() then
-      vim.schedule(function()
-        if vim.api.nvim_buf_is_valid(content_buf) then
-          ensure_buffer_highlighting(content_buf)
-        end
-        reveal_content_buffer_in_tree()
-        if vim.api.nvim_win_is_valid(tree_win) then
-          vim.api.nvim_set_current_win(tree_win)
-        end
-      end)
-    elseif vim.api.nvim_win_is_valid(tree_win) then
-      vim.api.nvim_set_current_win(tree_win)
+  local tree_width = require("config.tree_width").get()
+  vim.cmd(string.format("topleft vertical %dnew", tree_width))
+  local tree_win = vim.api.nvim_get_current_win()
+  tree_api.tree.open({ current_window = true, path = vim.fn.getcwd() })
+  vim.cmd(string.format("vertical resize %d", tree_width))
+
+  if vim.api.nvim_win_is_valid(tree_win) then
+    vim.wo[tree_win].winfixwidth = true
+  end
+
+  if vim.api.nvim_win_is_valid(content_win) then
+    local ok_tree_lib, tree_lib = pcall(require, "nvim-tree.lib")
+    if ok_tree_lib then
+      -- The startup placeholder is nofile, so nvim-tree's picker excludes it.
+      tree_lib.target_winid = content_win
+    end
+  end
+
+  local function content_buffer_is_named()
+    return vim.api.nvim_buf_is_valid(content_buf) and vim.api.nvim_buf_get_name(content_buf) ~= ""
+  end
+
+  local function reveal_content_buffer_in_tree()
+    if not content_buffer_is_named() then
+      return
     end
 
-    if workspace_restore_error and should_restore_workspace_file then
-      local file_label = workspace_restore_file and vim.fn.fnamemodify(workspace_restore_file, ":~:.")
-        or "the last workspace file"
-      vim.schedule(function()
-        vim.notify(
-          string.format("Skipped workspace restore for %s: %s", file_label, workspace_restore_error),
-          vim.log.levels.WARN
-        )
-      end)
-    end
+    tree_api.tree.find_file({
+      buf = content_buf,
+      focus = false,
+      open = false,
+      update_root = false,
+    })
+  end
 
+  if workspace_entry then
     vim.schedule(function()
-      project_lsp.ensure_go_project(vim.fn.getcwd())
+      ensure_buffer_highlighting(content_buf)
+      restore_workspace_cursor(content_win, content_buf, workspace_entry.cursor)
+      reveal_content_buffer_in_tree()
 
-      if vim.api.nvim_buf_is_valid(content_buf) then
-        project_lsp.ensure_go_buffer(content_buf)
+      local focus = workspace_entry.focus or { kind = "file" }
+      if focus.kind == "tree" and vim.api.nvim_win_is_valid(tree_win) then
+        vim.api.nvim_set_current_win(tree_win)
+      elseif vim.api.nvim_win_is_valid(content_win) then
+        vim.api.nvim_set_current_win(content_win)
       end
     end)
+  elseif content_buffer_is_named() then
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(content_buf) then
+        ensure_buffer_highlighting(content_buf)
+      end
+      reveal_content_buffer_in_tree()
+      if vim.api.nvim_win_is_valid(tree_win) then
+        vim.api.nvim_set_current_win(tree_win)
+      end
+    end)
+  elseif vim.api.nvim_win_is_valid(tree_win) then
+    vim.api.nvim_set_current_win(tree_win)
+  end
+
+  if workspace_restore_error and should_restore_workspace_file then
+    local file_label = workspace_restore_file and vim.fn.fnamemodify(workspace_restore_file, ":~:.")
+      or "the last workspace file"
+    vim.schedule(function()
+      vim.notify(
+        string.format("Skipped workspace restore for %s: %s", file_label, workspace_restore_error),
+        vim.log.levels.WARN
+      )
+    end)
+  end
+
+  vim.schedule(function()
+    project_lsp.ensure_go_project(vim.fn.getcwd())
+
+    if vim.api.nvim_buf_is_valid(content_buf) then
+      project_lsp.ensure_go_buffer(content_buf)
+    end
+  end)
+end
+
+vim.api.nvim_create_autocmd({ "VimEnter", "UIEnter" }, {
+  group = group,
+  callback = function(args)
+    open_workspace_ui(args)
+
+    if not workspace_ui_started then
+      local file = workspace_start_file(args)
+      vim.defer_fn(function()
+        open_workspace_ui({ file = file })
+      end, 50)
+    end
   end,
 })
 
