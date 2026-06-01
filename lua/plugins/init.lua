@@ -515,11 +515,14 @@ return {
         enable = true,
         auto_open = false,
       },
-      hijack_cursor = true,
+      hijack_cursor = false,
       renderer = {
         group_empty = true,
         full_name = false,
         highlight_git = true,
+        icons = {
+          git_placement = "after",
+        },
         root_folder_label = false,
         indent_markers = {
           enable = true,
