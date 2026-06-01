@@ -3,6 +3,11 @@ local nvim_tree_name_popup = {
   buf = nil,
   win = nil,
 }
+local nvim_tree_scroll = {
+  parent_path = nil,
+  width = nil,
+  leftcol = 0,
+}
 local project_lsp = require("config.project_lsp")
 local workspace_state_path = vim.fn.stdpath("state") .. "/erwin-workspace-files.json"
 local workspace_placeholder_namespace = vim.api.nvim_create_namespace("erwin_workspace_placeholder")
@@ -1334,6 +1339,15 @@ local function jump_to_references()
   end)
 end
 
+local function nvim_tree_node_parent_path(node)
+  local path = node and node.absolute_path
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+
+  return vim.fs.dirname(path)
+end
+
 local function keep_nvim_tree_node_visible()
   if vim.bo.filetype ~= "NvimTree" or vim.wo.wrap then
     return
@@ -1352,6 +1366,9 @@ local function keep_nvim_tree_node_visible()
   local line = vim.api.nvim_get_current_line()
   local start_col = line:find(node.name, 1, true)
   if not start_col then
+    nvim_tree_scroll.parent_path = nil
+    nvim_tree_scroll.width = nil
+    nvim_tree_scroll.leftcol = 0
     vim.fn.winrestview({ leftcol = 0 })
     return
   end
@@ -1361,6 +1378,15 @@ local function keep_nvim_tree_node_visible()
   local available_width = vim.api.nvim_win_get_width(0) - (wininfo.textoff or 0)
 
   if available_width <= 0 then
+    return
+  end
+
+  local parent_path = nvim_tree_node_parent_path(node)
+  local view = vim.fn.winsaveview()
+  if parent_path ~= nil and parent_path == nvim_tree_scroll.parent_path and available_width == nvim_tree_scroll.width then
+    if view.leftcol ~= nvim_tree_scroll.leftcol then
+      vim.fn.winrestview({ leftcol = nvim_tree_scroll.leftcol })
+    end
     return
   end
 
@@ -1377,10 +1403,13 @@ local function keep_nvim_tree_node_visible()
     target_leftcol = math.max(0, prefix_width - max_visible_prefix)
   end
 
-  local view = vim.fn.winsaveview()
   if view.leftcol ~= target_leftcol then
     vim.fn.winrestview({ leftcol = target_leftcol })
   end
+
+  nvim_tree_scroll.parent_path = parent_path
+  nvim_tree_scroll.width = available_width
+  nvim_tree_scroll.leftcol = target_leftcol
 end
 
 local function hide_nvim_tree_name_popup()
