@@ -1780,8 +1780,14 @@ vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter", "WinEnter", "CursorMove
   pattern = "NvimTree_*",
   callback = function()
     attach_nvim_tree_delete_handler()
-    keep_nvim_tree_node_visible()
-    show_nvim_tree_name_popup()
+    vim.schedule(function()
+      if vim.bo.filetype ~= "NvimTree" then
+        return
+      end
+
+      keep_nvim_tree_node_visible()
+      show_nvim_tree_name_popup()
+    end)
   end,
 })
 
