@@ -520,6 +520,9 @@ return {
         group_empty = true,
         full_name = false,
         highlight_git = true,
+        icons = {
+          git_placement = "signcolumn",
+        },
         root_folder_label = false,
         indent_markers = {
           enable = true,
