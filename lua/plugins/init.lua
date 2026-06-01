@@ -530,8 +530,10 @@ return {
       },
       sync_root_with_cwd = true,
       update_focused_file = {
-        enable = false,
-        update_root = false,
+        enable = true,
+        update_root = {
+          enable = false,
+        },
       },
       view = {
         preserve_window_proportions = false,
