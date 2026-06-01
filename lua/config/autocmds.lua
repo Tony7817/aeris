@@ -1454,10 +1454,12 @@ local function show_nvim_tree_name_popup()
   local view = vim.fn.winsaveview()
   local wininfo = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1] or {}
   local available_width = vim.api.nvim_win_get_width(0) - (wininfo.textoff or 0)
-  local visible_prefix = math.max(prefix_width - view.leftcol, 0)
-  local visible_name_width = math.max(available_width - visible_prefix, 0)
+  local name_start = prefix_width
+  local name_end = prefix_width + name_width
+  local visible_start = view.leftcol
+  local visible_end = view.leftcol + available_width
 
-  if available_width <= 0 or name_width <= visible_name_width then
+  if available_width <= 0 or (name_start >= visible_start and name_end <= visible_end) then
     hide_nvim_tree_name_popup()
     return
   end
