@@ -460,8 +460,9 @@ local function is_workspace_page_buffer(bufnr)
   return vim.bo[bufnr].buftype == ""
 end
 
-local function has_workspace_page_buffer()
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+local function has_workspace_page_window()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local bufnr = vim.api.nvim_win_get_buf(win)
     if is_workspace_page_buffer(bufnr) then
       return true
     end
@@ -536,7 +537,7 @@ local function ensure_workspace_placeholder()
     return
   end
 
-  if has_workspace_page_buffer() then
+  if has_workspace_page_window() then
     return
   end
 
