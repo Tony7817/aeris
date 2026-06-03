@@ -1923,7 +1923,6 @@ vim.api.nvim_create_autocmd("FileType", {
     "json",
     "jsonc",
     "lua",
-    "markdown",
     "proto",
     "python",
     "sh",
