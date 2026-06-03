@@ -1,4 +1,5 @@
 local group = vim.api.nvim_create_augroup("erwin_nvim", { clear = true })
+local log = require("config.log")
 local nvim_tree_name_popup = {
   buf = nil,
   win = nil,
@@ -948,6 +949,14 @@ local function lsp_clients_for(bufnr, method)
   return vim.lsp.get_clients({ bufnr = bufnr, method = method })
 end
 
+local function lsp_client_names(bufnr, method)
+  local names = {}
+  for _, client in ipairs(lsp_clients_for(bufnr, method)) do
+    table.insert(names, client.name)
+  end
+  return names
+end
+
 local function try_start_lsp_navigation(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) or vim.bo[bufnr].buftype ~= "" then
     return
@@ -971,6 +980,14 @@ local function jump_to_definition()
   local bufnr = vim.api.nvim_get_current_buf()
   local source_win = vim.api.nvim_get_current_win()
   local started_at = vim.uv.now()
+  local method = "textDocument/definition"
+
+  log.info("lsp.definition.start", {
+    bufnr = bufnr,
+    clients = lsp_client_names(bufnr, method),
+    file = vim.api.nvim_buf_get_name(bufnr),
+    filetype = vim.bo[bufnr].filetype,
+  })
 
   local function request_definition()
     if vim.api.nvim_win_is_valid(source_win) and vim.api.nvim_win_get_buf(source_win) == bufnr then
@@ -993,10 +1010,20 @@ local function jump_to_definition()
   end
 
   if #lsp_clients_for(bufnr, "textDocument/definition") > 0 then
+    log.info("lsp.definition.dispatch", {
+      bufnr = bufnr,
+      clients = lsp_client_names(bufnr, method),
+      mode = "direct",
+    })
     request_definition()
     return
   end
 
+  log.warn("lsp.definition.no_client", {
+    bufnr = bufnr,
+    file = vim.api.nvim_buf_get_name(bufnr),
+    filetype = vim.bo[bufnr].filetype,
+  })
   try_start_lsp_navigation(bufnr)
 
   local function poll()
@@ -1005,11 +1032,23 @@ local function jump_to_definition()
     end
 
     if #lsp_clients_for(bufnr, "textDocument/definition") > 0 then
+      log.info("lsp.definition.dispatch", {
+        bufnr = bufnr,
+        clients = lsp_client_names(bufnr, method),
+        elapsed_ms = vim.uv.now() - started_at,
+        mode = "after_wait",
+      })
       request_definition()
       return
     end
 
     if vim.uv.now() - started_at >= 2500 then
+      log.warn("lsp.definition.fallback", {
+        bufnr = bufnr,
+        elapsed_ms = vim.uv.now() - started_at,
+        file = vim.api.nvim_buf_get_name(bufnr),
+        filetype = vim.bo[bufnr].filetype,
+      })
       fallback_definition()
       return
     end
@@ -1551,6 +1590,14 @@ local function open_workspace_ui(args)
     vim.cmd.enew()
   end
 
+  log.info("workspace.open", {
+    cwd = vim.fn.getcwd(),
+    file = file,
+    has_args = has_args,
+    is_directory = is_directory,
+    project_root = log.project_root(),
+  })
+
   local content_win = vim.api.nvim_get_current_win()
   local content_buf = vim.api.nvim_get_current_buf()
 
@@ -1643,6 +1690,10 @@ local function open_workspace_ui(args)
   if workspace_restore_error and should_restore_workspace_file then
     local file_label = workspace_restore_file and vim.fn.fnamemodify(workspace_restore_file, ":~:.")
       or "the last workspace file"
+    log.warn("workspace.restore_failed", {
+      error = workspace_restore_error,
+      file = workspace_restore_file,
+    })
     vim.schedule(function()
       vim.notify(
         string.format("Skipped workspace restore for %s: %s", file_label, workspace_restore_error),
@@ -1875,6 +1926,15 @@ vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(event)
     local map = vim.keymap.set
     local opts = { buffer = event.buf }
+    local client = event.data and vim.lsp.get_client_by_id(event.data.client_id)
+
+    log.info("lsp.attach", {
+      bufnr = event.buf,
+      client = client and client.name or "",
+      file = vim.api.nvim_buf_get_name(event.buf),
+      filetype = vim.bo[event.buf].filetype,
+      project_root = log.project_root(),
+    })
 
     map("n", "<F12>", jump_to_implementation_or_definition, vim.tbl_extend("force", opts, { desc = "Go to implementation or definition" }))
     map("n", "gd", jump_to_definition, vim.tbl_extend("force", opts, { desc = "Go to definition" }))

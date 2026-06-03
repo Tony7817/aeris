@@ -1,4 +1,5 @@
 local map = vim.keymap.set
+local log = require("config.log")
 local GIT_CHANGE_REPEAT_TIMEOUT_MS = 1200
 local git_change_repeat = {
   deadline = 0,
@@ -291,9 +292,13 @@ local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
     actions.to_fuzzy_refine(prompt_bufnr)
   end
 
-  local function select_and_reveal(action)
+  local function select_and_reveal(action, action_name)
     return function()
       local path = telescope_entry_path(action_state.get_selected_entry())
+      log.info("telescope.find_files.select", {
+        action = action_name,
+        path = path,
+      })
       action(prompt_bufnr)
       reveal_file_in_nvim_tree(path)
     end
@@ -301,10 +306,10 @@ local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
 
   if type(picker_map) == "function" then
     for _, mode in ipairs({ "i", "n" }) do
-      picker_map(mode, "<CR>", select_and_reveal(actions.select_default))
-      picker_map(mode, "<C-x>", select_and_reveal(actions.select_horizontal))
-      picker_map(mode, "<C-v>", select_and_reveal(actions.select_vertical))
-      picker_map(mode, "<C-t>", select_and_reveal(actions.select_tab))
+      picker_map(mode, "<CR>", select_and_reveal(actions.select_default, "default"))
+      picker_map(mode, "<C-x>", select_and_reveal(actions.select_horizontal, "horizontal"))
+      picker_map(mode, "<C-v>", select_and_reveal(actions.select_vertical, "vertical"))
+      picker_map(mode, "<C-t>", select_and_reveal(actions.select_tab, "tab"))
     end
   end
 
@@ -323,6 +328,11 @@ end
 open_find_files = function(opts)
   opts = opts or {}
   local strict_case = opts.strict_case == true
+  log.info("telescope.find_files.open", {
+    cwd = vim.fn.getcwd(),
+    default_text = opts.default_text,
+    strict_case = strict_case,
+  })
 
   require("telescope.builtin").find_files({
     find_command = { "rg", "--files", "--hidden", "--glob", "!**/.git/**", "--color", "never" },

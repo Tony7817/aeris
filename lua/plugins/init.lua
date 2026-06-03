@@ -414,9 +414,13 @@ return {
     opts = {
       on_attach = function(bufnr)
         local api = require("nvim-tree.api")
+        local log = require("config.log")
         api.map.on_attach.default(bufnr)
 
-        local function show_deleted_node()
+        local function show_deleted_node(node)
+          log.warn("nvim_tree.deleted_node", {
+            path = node and node.absolute_path or "",
+          })
           vim.api.nvim_echo({ { "文件已被删除", "WarningMsg" } }, false, {})
           api.tree.reload()
         end
@@ -434,11 +438,21 @@ return {
           return function()
             local node = api.tree.get_node_under_cursor()
             if not node_exists(node) then
-              show_deleted_node()
+              show_deleted_node(node)
               return
             end
 
-            action(node)
+            local ok, err = xpcall(function()
+              action(node)
+            end, debug.traceback)
+
+            if not ok then
+              log.error("nvim_tree.open_error", {
+                error = err,
+                path = node.absolute_path,
+              })
+              vim.notify("nvim-tree open failed; see :AerisLog", vim.log.levels.ERROR)
+            end
           end
         end
 
