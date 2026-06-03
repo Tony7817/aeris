@@ -42,6 +42,31 @@ local function is_real_file(path)
   return path ~= nil and vim.fn.filereadable(path) == 1 and vim.fn.isdirectory(path) == 0
 end
 
+local function swap_files_for_path(path)
+  path = normalize_path(path)
+  if path == nil then
+    return {}
+  end
+
+  local swap_dir = vim.fn.stdpath("state") .. "/swap"
+  local ok, entries = pcall(vim.fn.readdir, swap_dir)
+  if not ok or type(entries) ~= "table" then
+    return {}
+  end
+
+  local encoded = path:gsub("/", "%%")
+  local prefix = encoded .. ".sw"
+  local matches = {}
+
+  for _, entry in ipairs(entries) do
+    if type(entry) == "string" and entry:sub(1, #prefix) == prefix then
+      table.insert(matches, swap_dir .. "/" .. entry)
+    end
+  end
+
+  return matches
+end
+
 local function is_path_in_cwd(path, cwd)
   path = canonical_path(path)
   cwd = canonical_path(cwd)
@@ -712,6 +737,15 @@ local function try_restore_workspace_file(win, file)
   file = canonical_path(file)
   if file == nil or not vim.api.nvim_win_is_valid(win) then
     return false, nil, nil
+  end
+
+  local swap_files = swap_files_for_path(file)
+  if #swap_files > 0 then
+    log.warn("workspace.restore_swap_found", {
+      file = file,
+      swap_files = swap_files,
+    })
+    return false, nil, "Swap file exists for the last workspace file"
   end
 
   vim.api.nvim_set_current_win(win)
