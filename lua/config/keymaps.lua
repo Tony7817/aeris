@@ -271,7 +271,6 @@ local open_live_grep
 local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
-  attach_telescope_statusline(prompt_bufnr)
 
   local function reopen_with_case(next_strict_case)
     local query = action_state.get_current_line()
@@ -328,7 +327,6 @@ open_find_files = function(opts)
   require("telescope.builtin").find_files({
     find_command = { "rg", "--files", "--hidden", "--glob", "!**/.git/**", "--color", "never" },
     file_ignore_patterns = {},
-    previewer = false,
     case_mode = strict_case and "respect_case" or "ignore_case",
     default_text = opts.default_text,
     prompt_title = strict_case and "Find Files [Case]" or "Find Files",
