@@ -326,7 +326,7 @@ open_find_files = function(opts)
   local strict_case = opts.strict_case == true
 
   require("telescope.builtin").find_files({
-    hidden = true,
+    find_command = { "rg", "--files", "--hidden", "--glob", "!**/.git/**", "--color", "never" },
     file_ignore_patterns = {},
     case_mode = strict_case and "respect_case" or "ignore_case",
     default_text = opts.default_text,
