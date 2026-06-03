@@ -327,8 +327,6 @@ open_find_files = function(opts)
 
   require("telescope.builtin").find_files({
     hidden = true,
-    no_ignore = true,
-    no_ignore_parent = true,
     file_ignore_patterns = {},
     case_mode = strict_case and "respect_case" or "ignore_case",
     default_text = opts.default_text,
