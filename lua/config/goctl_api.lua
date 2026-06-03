@@ -5,12 +5,15 @@ local M = {}
 local semantic_namespace = api.nvim_create_namespace("aeris_goctl_api_semantic")
 local helper_binary = vim.fn.stdpath("cache") .. "/aeris-goctl-api-indexer"
 local helper_dir = vim.fn.stdpath("config") .. "/tools/goctl-api-indexer"
+local helper_build_timeout_ms = 15000
+local helper_index_timeout_ms = 2000
 local helper_sources = {
   helper_dir .. "/go.mod",
   helper_dir .. "/main.go",
 }
 
 local index_cache = {}
+local log = require("config.log")
 
 local function normalize_path(path)
   if type(path) ~= "string" or path == "" then
@@ -57,10 +60,11 @@ local function ensure_helper()
   end
 
   vim.fn.mkdir(vim.fn.fnamemodify(helper_binary, ":h"), "p")
-  local result = vim.system({ "go", "build", "-o", helper_binary, "." }, {
+  local build = vim.system({ "go", "build", "-o", helper_binary, "." }, {
     cwd = helper_dir,
     text = true,
-  }):wait()
+  })
+  local result = build:wait(helper_build_timeout_ms)
 
   if result.code ~= 0 then
     return nil, vim.trim(result.stderr or result.stdout or "failed to build goctl api indexer")
@@ -88,10 +92,21 @@ local function read_index(path)
     return nil, build_err
   end
 
-  local result = vim.system({ binary, path }, {
+  log.info("goctl_api.index.start", {
+    file = path,
+  })
+
+  local system = vim.system({ binary, path }, {
     text = true,
-  }):wait()
+  })
+  local result = system:wait(helper_index_timeout_ms)
   if result.code ~= 0 then
+    if result.code == 124 then
+      log.warn("goctl_api.index_timeout", {
+        file = path,
+        timeout_ms = helper_index_timeout_ms,
+      })
+    end
     return nil, vim.trim(result.stderr or result.stdout or "failed to parse goctl api file")
   end
 
@@ -109,6 +124,12 @@ local function read_index(path)
   end
 
   index_cache[path] = { mtime = mtime, index = decoded }
+  log.info("goctl_api.index.done", {
+    file = path,
+    files = #decoded.files,
+    jumps = #decoded.jumps,
+    symbols = #decoded.symbols,
+  })
   return decoded
 end
 

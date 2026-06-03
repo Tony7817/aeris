@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"regexp"
 	"strings"
-
-	goctlast "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/ast"
-	goctlparser "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/parser"
 )
 
 type rangeItem struct {
@@ -38,10 +35,44 @@ type index struct {
 type builder struct {
 	visited map[string]bool
 	files   []string
-	lines   map[string][]string
 	defs    map[string]target
 	jumps   []rangeItem
 	symbols []rangeItem
+}
+
+var (
+	importLinePattern = regexp.MustCompile(`^\s*import\s+"([^"]+)"`)
+	typeLinePattern   = regexp.MustCompile(`^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	typeNamePattern   = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\b`)
+	handlerPattern    = regexp.MustCompile(`@handler\s+([A-Za-z_][A-Za-z0-9_]*)`)
+	routeTypePattern  = regexp.MustCompile(`\(([A-Za-z_][A-Za-z0-9_]*)\)`)
+	identifierPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+)
+
+var builtInTypes = map[string]bool{
+	"any":        true,
+	"bool":       true,
+	"byte":       true,
+	"complex64":  true,
+	"complex128": true,
+	"error":      true,
+	"float32":    true,
+	"float64":    true,
+	"int":        true,
+	"int8":       true,
+	"int16":      true,
+	"int32":      true,
+	"int64":      true,
+	"interface":  true,
+	"map":        true,
+	"rune":       true,
+	"string":     true,
+	"uint":       true,
+	"uint8":      true,
+	"uint16":     true,
+	"uint32":     true,
+	"uint64":     true,
+	"uintptr":    true,
 }
 
 func main() {
@@ -58,7 +89,6 @@ func main() {
 
 	b := &builder{
 		visited: make(map[string]bool),
-		lines:   make(map[string][]string),
 		defs:    make(map[string]target),
 	}
 	if err := b.parseFile(path); err != nil {
@@ -86,54 +116,96 @@ func (b *builder) parseFile(path string) error {
 	}
 	b.visited[path] = true
 	b.files = append(b.files, path)
-	if err := b.loadLines(path); err != nil {
+
+	content, err := os.ReadFile(path)
+	if err != nil {
 		return err
 	}
 
-	parser := goctlparser.New(path, nil)
-	parsed := parser.Parse()
-	if err := parser.CheckErrors(); err != nil {
-		return err
-	}
-	if parsed == nil {
-		return fmt.Errorf("failed to parse %s", path)
-	}
+	lines := strings.Split(string(content), "\n")
+	state := scanState{}
+	for i, line := range lines {
+		lineNumber := i + 1
+		trimmed := strings.TrimSpace(stripLineComment(line))
 
-	for _, stmt := range parsed.Stmts {
-		switch value := stmt.(type) {
-		case *goctlast.ImportLiteralStmt:
-			if err := b.addImport(path, value.Value); err != nil {
-				return err
+		if state.inImportGroup {
+			if trimmed == ")" {
+				state.inImportGroup = false
+				continue
 			}
-		case *goctlast.ImportGroupStmt:
-			for _, imported := range value.Values {
-				if err := b.addImport(path, imported); err != nil {
-					return err
-				}
+			b.addImport(path, line, trimmed, lineNumber)
+			continue
+		}
+
+		if state.inTypeGroup {
+			if trimmed == ")" {
+				state.inTypeGroup = false
+				continue
 			}
-		case *goctlast.TypeLiteralStmt:
-			b.addTypeDefinition(path, value.Expr)
-			b.addDataTypeReferences(path, value.Expr.DataType)
-		case *goctlast.TypeGroupStmt:
-			for _, expr := range value.ExprList {
-				b.addTypeDefinition(path, expr)
-				b.addDataTypeReferences(path, expr.DataType)
+			b.scanGroupedType(path, line, lineNumber)
+			continue
+		}
+
+		if state.inStruct {
+			if strings.HasPrefix(trimmed, "}") {
+				state.inStruct = false
+				continue
 			}
-		case *goctlast.ServiceStmt:
-			b.addServiceReferences(path, value)
+			b.scanStructField(path, line, lineNumber)
+			continue
+		}
+
+		if state.inServerBlock {
+			if strings.HasPrefix(trimmed, "group:") {
+				state.group = strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "group:")), `"`)
+			}
+			if trimmed == ")" {
+				state.inServerBlock = false
+			}
+			continue
+		}
+
+		switch {
+		case trimmed == "import (":
+			state.inImportGroup = true
+		case strings.HasPrefix(trimmed, "import "):
+			b.addImport(path, line, trimmed, lineNumber)
+		case trimmed == "type (":
+			state.inTypeGroup = true
+		case strings.HasPrefix(trimmed, "type "):
+			if b.scanTypeLine(path, line, lineNumber) && strings.Contains(line, "{") && !strings.Contains(line, "}") {
+				state.inStruct = true
+			}
+		case strings.HasPrefix(trimmed, "@server"):
+			state.group = ""
+			state.inServerBlock = strings.Contains(trimmed, "(") && !strings.Contains(trimmed, ")")
+		case strings.HasPrefix(trimmed, "@handler"):
+			b.scanHandler(path, line, lineNumber, state.group)
+		case isRouteLine(trimmed):
+			b.scanRouteTypes(path, line, lineNumber)
 		}
 	}
 
 	return nil
 }
 
-func (b *builder) addImport(currentFile string, node *goctlast.TokenNode) error {
-	if node == nil {
-		return nil
+type scanState struct {
+	group         string
+	inImportGroup bool
+	inServerBlock bool
+	inStruct      bool
+	inTypeGroup   bool
+}
+
+func (b *builder) addImport(currentFile, rawLine, trimmed string, line int) {
+	value := ""
+	if match := importLinePattern.FindStringSubmatch(rawLine); len(match) == 2 {
+		value = match[1]
+	} else if strings.HasPrefix(trimmed, `"`) {
+		value = strings.Trim(trimmed, `"`)
 	}
-	value := tokenText(node)
 	if value == "" {
-		return nil
+		return
 	}
 
 	targetFile := value
@@ -142,13 +214,17 @@ func (b *builder) addImport(currentFile string, node *goctlast.TokenNode) error 
 	}
 	targetFile = filepath.Clean(targetFile)
 
+	column := strings.Index(rawLine, value)
+	if column < 0 {
+		column = 0
+	}
 	b.jumps = append(b.jumps, rangeItem{
 		Kind:      "import",
 		Name:      value,
 		File:      currentFile,
-		Line:      b.tokenLine(node),
-		Column:    b.tokenColumn(currentFile, node),
-		EndColumn: b.tokenEndColumn(currentFile, node),
+		Line:      line,
+		Column:    column,
+		EndColumn: column + len(value),
 		Target: &target{
 			File:   targetFile,
 			Line:   1,
@@ -157,25 +233,41 @@ func (b *builder) addImport(currentFile string, node *goctlast.TokenNode) error 
 	})
 
 	if _, err := os.Stat(targetFile); err == nil {
-		return b.parseFile(targetFile)
+		_ = b.parseFile(targetFile)
 	}
-	return nil
 }
 
-func (b *builder) addTypeDefinition(file string, expr *goctlast.TypeExpr) {
-	if expr == nil || expr.Name == nil {
-		return
+func (b *builder) scanGroupedType(file, line string, lineNumber int) {
+	if match := typeNamePattern.FindStringSubmatch(line); len(match) == 2 {
+		name := match[1]
+		b.addTypeDefinition(file, line, lineNumber, name)
+		afterName := line[strings.Index(line, name)+len(name):]
+		b.addTypeReferences(file, line, afterName, lineNumber)
 	}
-	name := expr.Name.Token.Text
-	if name == "" {
-		return
+}
+
+func (b *builder) scanTypeLine(file, line string, lineNumber int) bool {
+	match := typeLinePattern.FindStringSubmatch(line)
+	if len(match) != 2 {
+		return false
 	}
-	line := b.tokenLine(expr.Name)
-	column := b.tokenColumn(file, expr.Name)
+
+	name := match[1]
+	b.addTypeDefinition(file, line, lineNumber, name)
+	afterName := line[strings.Index(line, name)+len(name):]
+	b.addTypeReferences(file, line, afterName, lineNumber)
+	return true
+}
+
+func (b *builder) addTypeDefinition(file, line string, lineNumber int, name string) {
+	column := strings.Index(line, name)
+	if column < 0 {
+		column = 0
+	}
 	if _, exists := b.defs[name]; !exists {
 		b.defs[name] = target{
 			File:   file,
-			Line:   line,
+			Line:   lineNumber,
 			Column: column,
 		}
 	}
@@ -183,182 +275,88 @@ func (b *builder) addTypeDefinition(file string, expr *goctlast.TypeExpr) {
 		Kind:      "type",
 		Name:      name,
 		File:      file,
-		Line:      line,
+		Line:      lineNumber,
 		Column:    column,
-		EndColumn: b.tokenEndColumn(file, expr.Name),
+		EndColumn: column + len(name),
 	})
 }
 
-func (b *builder) addServiceReferences(file string, stmt *goctlast.ServiceStmt) {
-	if stmt == nil {
+func (b *builder) scanStructField(file, line string, lineNumber int) {
+	line = stripLineComment(line)
+	beforeTag := strings.SplitN(line, "`", 2)[0]
+	parts := strings.Fields(beforeTag)
+	if len(parts) < 2 {
 		return
 	}
 
-	group := atServerValue(stmt.AtServerStmt, "group")
-	for _, item := range stmt.Routes {
-		if item == nil {
-			continue
-		}
-		if item.AtHandler != nil && item.AtHandler.Name != nil {
-			node := item.AtHandler.Name
-			b.jumps = append(b.jumps, rangeItem{
-				Kind:      "handler",
-				Name:      node.Token.Text,
-				File:      file,
-				Line:      b.tokenLine(node),
-				Column:    b.tokenColumn(file, node),
-				EndColumn: b.tokenEndColumn(file, node),
-				Group:     group,
-			})
-		}
-		if item.Route == nil {
-			continue
-		}
-		b.addBodyReference(file, item.Route.Request)
-		b.addBodyReference(file, item.Route.Response)
-	}
-}
-
-func (b *builder) addBodyReference(file string, body *goctlast.BodyStmt) {
-	if body == nil || body.Body == nil || body.Body.Value == nil {
+	fieldName := parts[0]
+	start := strings.Index(beforeTag, fieldName)
+	if start < 0 {
 		return
 	}
-	node := body.Body.Value
-	if isBuiltInType(node.Token.Text) {
+	typeText := beforeTag[start+len(fieldName):]
+	b.addTypeReferences(file, line, typeText, lineNumber)
+}
+
+func (b *builder) scanHandler(file, line string, lineNumber int, group string) {
+	match := handlerPattern.FindStringSubmatch(line)
+	if len(match) != 2 {
 		return
 	}
-	b.jumps = append(b.jumps, rangeItem{
-		Kind:      "type",
-		Name:      node.Token.Text,
-		File:      file,
-		Line:      b.tokenLine(node),
-		Column:    b.tokenColumn(file, node),
-		EndColumn: b.tokenEndColumn(file, node),
-	})
-}
 
-func (b *builder) addDataTypeReferences(file string, dataType goctlast.DataType) {
-	switch value := dataType.(type) {
-	case *goctlast.BaseDataType:
-		if !isBuiltInType(value.Base.Token.Text) {
-			b.addTypeReference(file, value.Base)
-		}
-	case *goctlast.PointerDataType:
-		b.addDataTypeReferences(file, value.DataType)
-	case *goctlast.ArrayDataType:
-		b.addDataTypeReferences(file, value.DataType)
-	case *goctlast.SliceDataType:
-		b.addDataTypeReferences(file, value.DataType)
-	case *goctlast.MapDataType:
-		b.addDataTypeReferences(file, value.Key)
-		b.addDataTypeReferences(file, value.Value)
-	case *goctlast.StructDataType:
-		for _, elem := range value.Elements {
-			b.addDataTypeReferences(file, elem.DataType)
-		}
-	}
-}
-
-func (b *builder) addTypeReference(file string, node *goctlast.TokenNode) {
-	if node == nil || node.Token.Text == "" {
-		return
-	}
-	b.jumps = append(b.jumps, rangeItem{
-		Kind:      "type",
-		Name:      node.Token.Text,
-		File:      file,
-		Line:      b.tokenLine(node),
-		Column:    b.tokenColumn(file, node),
-		EndColumn: b.tokenEndColumn(file, node),
-	})
-}
-
-func (b *builder) loadLines(file string) error {
-	content, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	b.lines[filepath.Clean(file)] = strings.Split(string(content), "\n")
-	return nil
-}
-
-func (b *builder) tokenLine(node *goctlast.TokenNode) int {
-	if node == nil {
-		return 1
-	}
-	return node.Token.Position.Line
-}
-
-func (b *builder) tokenColumn(file string, node *goctlast.TokenNode) int {
-	column, _ := b.tokenRange(file, node)
-	return column
-}
-
-func (b *builder) tokenEndColumn(file string, node *goctlast.TokenNode) int {
-	_, endColumn := b.tokenRange(file, node)
-	return endColumn
-}
-
-func (b *builder) tokenRange(file string, node *goctlast.TokenNode) (int, int) {
-	if node == nil {
-		return 0, 0
-	}
-
-	line := node.Token.Position.Line
-	raw := node.Token.Text
-	if line > 0 {
-		lines := b.lines[filepath.Clean(file)]
-		if line <= len(lines) {
-			if column, endColumn, ok := locateTokenInLine(lines[line-1], raw, node.Token.Position.Column); ok {
-				return column, endColumn
-			}
-			if text := tokenText(node); text != "" && text != raw {
-				if column, endColumn, ok := locateTokenInLine(lines[line-1], text, node.Token.Position.Column); ok {
-					return column, endColumn
-				}
-			}
-		}
-	}
-
-	column := node.Token.Position.Column - 1
+	name := match[1]
+	column := strings.Index(line, name)
 	if column < 0 {
 		column = 0
 	}
-	return column, column + len(raw)
+	b.jumps = append(b.jumps, rangeItem{
+		Kind:      "handler",
+		Name:      name,
+		File:      file,
+		Line:      lineNumber,
+		Column:    column,
+		EndColumn: column + len(name),
+		Group:     group,
+	})
 }
 
-func locateTokenInLine(line, token string, reportedColumn int) (int, int, bool) {
-	if token == "" {
-		return 0, 0, false
-	}
-
-	best := -1
-	bestDistance := 0
-	for offset := 0; ; {
-		index := strings.Index(line[offset:], token)
-		if index < 0 {
-			break
+func (b *builder) scanRouteTypes(file, line string, lineNumber int) {
+	for _, match := range routeTypePattern.FindAllStringSubmatchIndex(line, -1) {
+		if len(match) < 4 {
+			continue
 		}
-		column := offset + index
-		distance := min(abs(column-reportedColumn), abs(column-(reportedColumn-1)))
-		if best < 0 || distance < bestDistance {
-			best = column
-			bestDistance = distance
-		}
-		offset = column + len(token)
+		name := line[match[2]:match[3]]
+		b.addTypeReference(file, line, lineNumber, name, match[2])
 	}
-
-	if best < 0 {
-		return 0, 0, false
-	}
-	return best, best + len(token), true
 }
 
-func abs(value int) int {
-	if value < 0 {
-		return -value
+func (b *builder) addTypeReferences(file, rawLine, typeText string, lineNumber int) {
+	baseColumn := strings.Index(rawLine, typeText)
+	if baseColumn < 0 {
+		baseColumn = 0
 	}
-	return value
+
+	for _, match := range identifierPattern.FindAllStringIndex(typeText, -1) {
+		name := typeText[match[0]:match[1]]
+		if isBuiltInType(name) {
+			continue
+		}
+		b.addTypeReference(file, rawLine, lineNumber, name, baseColumn+match[0])
+	}
+}
+
+func (b *builder) addTypeReference(file, line string, lineNumber int, name string, column int) {
+	if isBuiltInType(name) {
+		return
+	}
+	b.jumps = append(b.jumps, rangeItem{
+		Kind:      "type",
+		Name:      name,
+		File:      file,
+		Line:      lineNumber,
+		Column:    column,
+		EndColumn: column + len(name),
+	})
 }
 
 func (b *builder) resolveTypeTargets() {
@@ -372,29 +370,22 @@ func (b *builder) resolveTypeTargets() {
 	}
 }
 
-func atServerValue(stmt *goctlast.AtServerStmt, key string) string {
-	if stmt == nil {
-		return ""
+func stripLineComment(line string) string {
+	if index := strings.Index(line, "//"); index >= 0 {
+		return line[:index]
 	}
-	for _, item := range stmt.Values {
-		if item.Key != nil && item.Value != nil && item.Key.Token.Text == key {
-			return tokenText(item.Value)
-		}
-	}
-	return ""
+	return line
 }
 
-func tokenText(node *goctlast.TokenNode) string {
-	if node == nil {
-		return ""
+func isRouteLine(line string) bool {
+	for _, method := range []string{"get ", "post ", "put ", "delete ", "patch ", "head ", "options "} {
+		if strings.HasPrefix(line, method) {
+			return true
+		}
 	}
-	text := node.Token.Text
-	if unquoted, err := strconv.Unquote(text); err == nil {
-		return unquoted
-	}
-	return strings.Trim(text, "`\"")
+	return false
 }
 
 func isBuiltInType(name string) bool {
-	return name == "any" || name == "interface{}" || goctlparser.IsBaseType(name)
+	return builtInTypes[name]
 }
