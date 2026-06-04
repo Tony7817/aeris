@@ -144,14 +144,40 @@ local function gopls_config()
   return type(config) == "table" and config or nil
 end
 
-local function ensure_gopls_for_root(root, opts)
-  root = canonical_path(root)
-  if root == nil then
+local function start_gopls_for_root(root, opts)
+  local config = gopls_config()
+  if config == nil then
     return false
   end
 
-  local config = gopls_config()
-  if config == nil then
+  local start_config = vim.deepcopy(config)
+  start_config.root_dir = root
+
+  local start_opts = {
+    silent = true,
+  }
+
+  local bufnr = opts and opts.bufnr or 0
+  if type(bufnr) == "number" and vim.api.nvim_buf_is_valid(bufnr) then
+    start_opts.bufnr = bufnr
+  end
+
+  if opts and opts.attach == false then
+    start_opts.attach = false
+  end
+
+  if opts and opts.reuse_client == false then
+    start_opts.reuse_client = function()
+      return false
+    end
+  end
+
+  return vim.lsp.start(start_config, start_opts) ~= nil
+end
+
+local function ensure_gopls_for_root(root, opts)
+  root = canonical_path(root)
+  if root == nil then
     return false
   end
 
@@ -172,22 +198,24 @@ local function ensure_gopls_for_root(root, opts)
     end
   end
 
-  local start_config = vim.deepcopy(config)
-  start_config.root_dir = root
+  return start_gopls_for_root(root, opts)
+end
 
-  local start_opts = {
-    silent = true,
-  }
+local function stop_gopls_for_root(root)
+  local stopped = false
 
-  if type(bufnr) == "number" and vim.api.nvim_buf_is_valid(bufnr) then
-    start_opts.bufnr = bufnr
+  for _, client in ipairs(vim.lsp.get_clients({ name = "gopls" })) do
+    if canonical_path(client.root_dir) == root then
+      stopped = true
+      if type(client.stop) == "function" then
+        pcall(client.stop, client, true)
+      else
+        pcall(vim.lsp.stop_client, client.id, true)
+      end
+    end
   end
 
-  if not attach then
-    start_opts.attach = false
-  end
-
-  return vim.lsp.start(start_config, start_opts) ~= nil
+  return stopped
 end
 
 function M.ensure_go_buffer(bufnr)
@@ -211,6 +239,39 @@ function M.ensure_go_buffer(bufnr)
   end
 
   return ensure_gopls_for_root(root, { bufnr = bufnr })
+end
+
+function M.restart_go_buffer(bufnr)
+  bufnr = vim._resolve_bufnr(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) then
+    return false
+  end
+
+  if not is_go_filetype(bufnr) or vim.bo[bufnr].buftype ~= "" then
+    return false
+  end
+
+  local path = canonical_path(vim.api.nvim_buf_get_name(bufnr))
+  if path == nil then
+    return false
+  end
+
+  local root = find_go_project_root(path)
+  if root == nil then
+    return false
+  end
+
+  stop_gopls_for_root(root)
+  vim.defer_fn(function()
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+      start_gopls_for_root(root, {
+        bufnr = bufnr,
+        reuse_client = false,
+      })
+    end
+  end, 150)
+
+  return true
 end
 
 function M.ensure_go_project(path)

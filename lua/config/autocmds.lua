@@ -1,5 +1,7 @@
 local group = vim.api.nvim_create_augroup("erwin_nvim", { clear = true })
 local log = require("config.log")
+local GOPLS_EMPTY_DEFINITION_RESTART_AFTER_MS = 10 * 60 * 1000
+local lsp_client_started_at = {}
 local nvim_tree_name_popup = {
   buf = nil,
   win = nil,
@@ -991,6 +993,46 @@ local function lsp_client_names(bufnr, method)
   return names
 end
 
+local function lsp_locations_from_results(results)
+  local locations = {}
+  local errors = {}
+  local offset_encoding = "utf-8"
+
+  for _, result in pairs(results or {}) do
+    local client = result.context and vim.lsp.get_client_by_id(result.context.client_id)
+    if client and client.offset_encoding then
+      offset_encoding = client.offset_encoding
+    end
+
+    if result.error then
+      table.insert(errors, result.error.message or tostring(result.error.code or "request failed"))
+    end
+
+    if result.result then
+      if vim.islist(result.result) then
+        vim.list_extend(locations, result.result)
+      else
+        table.insert(locations, result.result)
+      end
+    end
+  end
+
+  return locations, offset_encoding, errors
+end
+
+local function has_stale_gopls_client(clients)
+  local now = vim.uv.now()
+
+  for _, client in ipairs(clients) do
+    local client_age = now - (lsp_client_started_at[client.id] or 0)
+    if client.name == "gopls" and client_age >= GOPLS_EMPTY_DEFINITION_RESTART_AFTER_MS then
+      return true
+    end
+  end
+
+  return false
+end
+
 local function try_start_lsp_navigation(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) or vim.bo[bufnr].buftype ~= "" then
     return
@@ -1023,24 +1065,142 @@ local function jump_to_definition()
     filetype = vim.bo[bufnr].filetype,
   })
 
-  local function request_definition()
+  local function focus_source()
     if vim.api.nvim_win_is_valid(source_win) and vim.api.nvim_win_get_buf(source_win) == bufnr then
       vim.api.nvim_set_current_win(source_win)
     elseif vim.api.nvim_get_current_buf() ~= bufnr then
-      return
+      return false
     end
 
-    vim.lsp.buf.definition()
+    return true
   end
 
   local function fallback_definition()
-    if vim.api.nvim_win_is_valid(source_win) and vim.api.nvim_win_get_buf(source_win) == bufnr then
-      vim.api.nvim_set_current_win(source_win)
-    elseif vim.api.nvim_get_current_buf() ~= bufnr then
+    if not focus_source() then
       return
     end
 
     pcall(vim.cmd, "normal! gd")
+  end
+
+  local retried_gopls = false
+  local request_definition
+
+  local function restart_gopls_and_retry()
+    if retried_gopls then
+      return false
+    end
+
+    retried_gopls = true
+    local ok, restarted = pcall(project_lsp.restart_go_buffer, bufnr)
+
+    log.warn("lsp.definition.restart_gopls", {
+      bufnr = bufnr,
+      error = not ok and tostring(restarted) or nil,
+      file = vim.api.nvim_buf_get_name(bufnr),
+      restarted = ok and restarted or false,
+    })
+
+    if not ok or not restarted then
+      return false
+    end
+
+    local retry_started = vim.uv.now()
+
+    local function poll()
+      if not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+
+      if #lsp_clients_for(bufnr, method) > 0 then
+        log.info("lsp.definition.dispatch", {
+          bufnr = bufnr,
+          clients = lsp_client_names(bufnr, method),
+          elapsed_ms = vim.uv.now() - retry_started,
+          mode = "after_gopls_restart",
+        })
+        request_definition({ retried = true })
+        return
+      end
+
+      if vim.uv.now() - retry_started >= 4000 then
+        log.warn("lsp.definition.restart_timeout", {
+          bufnr = bufnr,
+          elapsed_ms = vim.uv.now() - retry_started,
+          file = vim.api.nvim_buf_get_name(bufnr),
+        })
+        vim.notify("No LSP definition available after restarting gopls", vim.log.levels.WARN)
+        return
+      end
+
+      vim.defer_fn(poll, 100)
+    end
+
+    vim.defer_fn(poll, 250)
+    return true
+  end
+
+  request_definition = function(opts)
+    opts = opts or {}
+    if not focus_source() then
+      return
+    end
+
+    local clients = lsp_clients_for(bufnr, method)
+    if vim.tbl_isempty(clients) then
+      return
+    end
+
+    local offset_encoding = clients[1].offset_encoding or "utf-8"
+    local ok_params, params = pcall(vim.lsp.util.make_position_params, source_win, offset_encoding)
+    if not ok_params then
+      params = vim.lsp.util.make_position_params()
+    end
+
+    vim.lsp.buf_request_all(bufnr, method, params, function(results)
+      local locations, result_encoding, errors = lsp_locations_from_results(results)
+
+      log.info("lsp.definition.result", {
+        bufnr = bufnr,
+        clients = lsp_client_names(bufnr, method),
+        count = #locations,
+        errors = errors,
+        file = vim.api.nvim_buf_get_name(bufnr),
+        retried = opts.retried == true,
+      })
+
+      if vim.tbl_isempty(locations) then
+        if not opts.retried and vim.bo[bufnr].filetype == "go" and has_stale_gopls_client(clients) then
+          if restart_gopls_and_retry() then
+            return
+          end
+        end
+
+        vim.notify("No definition found", vim.log.levels.INFO)
+        return
+      end
+
+      if not focus_source() then
+        return
+      end
+
+      if #locations == 1 then
+        vim.lsp.util.show_document(locations[1], result_encoding, { reuse_win = true })
+        return
+      end
+
+      local items = vim.lsp.util.locations_to_items(locations, result_encoding)
+      if vim.tbl_isempty(items) then
+        vim.notify("No definition found", vim.log.levels.INFO)
+        return
+      end
+
+      vim.fn.setqflist({}, " ", {
+        title = "LSP definitions",
+        items = items,
+      })
+      vim.cmd.copen()
+    end)
   end
 
   if #lsp_clients_for(bufnr, "textDocument/definition") > 0 then
@@ -1961,6 +2121,10 @@ vim.api.nvim_create_autocmd("LspAttach", {
     local opts = { buffer = event.buf }
     local client = event.data and vim.lsp.get_client_by_id(event.data.client_id)
 
+    if client then
+      lsp_client_started_at[client.id] = lsp_client_started_at[client.id] or vim.uv.now()
+    end
+
     log.info("lsp.attach", {
       bufnr = event.buf,
       client = client and client.name or "",
@@ -1975,5 +2139,20 @@ vim.api.nvim_create_autocmd("LspAttach", {
     map("n", "gi", jump_to_implementation, vim.tbl_extend("force", opts, { desc = "Go to implementation" }))
     map("n", "K", vim.lsp.buf.hover, vim.tbl_extend("force", opts, { desc = "Hover documentation" }))
     map("n", "<leader>ds", vim.lsp.buf.document_symbol, vim.tbl_extend("force", opts, { desc = "Document symbols" }))
+  end,
+})
+
+vim.api.nvim_create_autocmd("LspDetach", {
+  group = group,
+  callback = function(event)
+    local client = event.data and vim.lsp.get_client_by_id(event.data.client_id)
+
+    log.warn("lsp.detach", {
+      bufnr = event.buf,
+      client = client and client.name or "",
+      file = vim.api.nvim_buf_get_name(event.buf),
+      filetype = vim.bo[event.buf].filetype,
+      project_root = log.project_root(),
+    })
   end,
 })
