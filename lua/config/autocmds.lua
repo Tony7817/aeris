@@ -1,6 +1,7 @@
 local group = vim.api.nvim_create_augroup("erwin_nvim", { clear = true })
 local log = require("config.log")
 local GOPLS_EMPTY_DEFINITION_RESTART_AFTER_MS = 10 * 60 * 1000
+local GOPLS_NAVIGATION_REQUEST_TIMEOUT_MS = 3000
 local lsp_client_started_at = {}
 local nvim_tree_name_popup = {
   buf = nil,
@@ -1157,13 +1158,51 @@ local function jump_to_definition()
       params = vim.lsp.util.make_position_params()
     end
 
+    local completed = false
+    local request_started_at = vim.uv.now()
+
+    vim.defer_fn(function()
+      if completed or not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+
+      completed = true
+      log.warn("lsp.definition.timeout", {
+        bufnr = bufnr,
+        clients = lsp_client_names(bufnr, method),
+        elapsed_ms = vim.uv.now() - request_started_at,
+        file = vim.api.nvim_buf_get_name(bufnr),
+        retried = opts.retried == true,
+      })
+
+      if not opts.retried and vim.bo[bufnr].filetype == "go" and has_stale_gopls_client(clients) then
+        if restart_gopls_and_retry() then
+          return
+        end
+      end
+
+      vim.notify("LSP definition timed out", vim.log.levels.WARN)
+    end, GOPLS_NAVIGATION_REQUEST_TIMEOUT_MS)
+
     vim.lsp.buf_request_all(bufnr, method, params, function(results)
+      if completed then
+        log.warn("lsp.definition.late_result", {
+          bufnr = bufnr,
+          elapsed_ms = vim.uv.now() - request_started_at,
+          file = vim.api.nvim_buf_get_name(bufnr),
+          retried = opts.retried == true,
+        })
+        return
+      end
+
+      completed = true
       local locations, result_encoding, errors = lsp_locations_from_results(results)
 
       log.info("lsp.definition.result", {
         bufnr = bufnr,
         clients = lsp_client_names(bufnr, method),
         count = #locations,
+        elapsed_ms = vim.uv.now() - request_started_at,
         errors = errors,
         file = vim.api.nvim_buf_get_name(bufnr),
         retried = opts.retried == true,
@@ -1294,6 +1333,14 @@ local function jump_to_implementation(opts)
   opts = opts or {}
   local bufnr = vim.api.nvim_get_current_buf()
   local source_win = vim.api.nvim_get_current_win()
+  local method = "textDocument/implementation"
+
+  log.info("lsp.implementation.start", {
+    bufnr = bufnr,
+    clients = lsp_client_names(bufnr, method),
+    file = vim.api.nvim_buf_get_name(bufnr),
+    filetype = vim.bo[bufnr].filetype,
+  })
 
   local function jump_to_definition()
     if opts.fallback_to_definition then
@@ -1304,8 +1351,66 @@ local function jump_to_implementation(opts)
     end
   end
 
-  local function request_implementations()
-    local clients = lsp_clients_for(bufnr, "textDocument/implementation")
+  local retried_gopls = false
+  local request_implementations
+
+  local function restart_gopls_and_retry()
+    if retried_gopls then
+      return false
+    end
+
+    retried_gopls = true
+    local ok, restarted = pcall(project_lsp.restart_go_buffer, bufnr)
+
+    log.warn("lsp.implementation.restart_gopls", {
+      bufnr = bufnr,
+      error = not ok and tostring(restarted) or nil,
+      file = vim.api.nvim_buf_get_name(bufnr),
+      restarted = ok and restarted or false,
+    })
+
+    if not ok or not restarted then
+      return false
+    end
+
+    local retry_started = vim.uv.now()
+
+    local function poll()
+      if not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+
+      if #lsp_clients_for(bufnr, method) > 0 then
+        log.info("lsp.implementation.dispatch", {
+          bufnr = bufnr,
+          clients = lsp_client_names(bufnr, method),
+          elapsed_ms = vim.uv.now() - retry_started,
+          mode = "after_gopls_restart",
+        })
+        request_implementations({ retried = true })
+        return
+      end
+
+      if vim.uv.now() - retry_started >= 4000 then
+        log.warn("lsp.implementation.restart_timeout", {
+          bufnr = bufnr,
+          elapsed_ms = vim.uv.now() - retry_started,
+          file = vim.api.nvim_buf_get_name(bufnr),
+        })
+        vim.notify("No LSP implementation available after restarting gopls", vim.log.levels.WARN)
+        return
+      end
+
+      vim.defer_fn(poll, 100)
+    end
+
+    vim.defer_fn(poll, 250)
+    return true
+  end
+
+  request_implementations = function(request_opts)
+    request_opts = request_opts or {}
+    local clients = lsp_clients_for(bufnr, method)
 
     if vim.tbl_isempty(clients) then
       if opts.fallback_to_definition then
@@ -1321,22 +1426,63 @@ local function jump_to_implementation(opts)
       return vim.lsp.util.make_position_params(win, client.offset_encoding)
     end
 
-    vim.lsp.buf_request_all(bufnr, "textDocument/implementation", params, function(results)
-      local locations = {}
-      local offset_encoding = "utf-8"
+    local completed = false
+    local request_started_at = vim.uv.now()
 
-      for _, result in pairs(results) do
-        if result.result then
-          local client = result.context and vim.lsp.get_client_by_id(result.context.client_id)
-          offset_encoding = client and client.offset_encoding or offset_encoding
+    if not request_opts.retried then
+      log.info("lsp.implementation.dispatch", {
+        bufnr = bufnr,
+        clients = lsp_client_names(bufnr, method),
+        mode = "direct",
+      })
+    end
 
-          if vim.islist(result.result) then
-            vim.list_extend(locations, result.result)
-          else
-            table.insert(locations, result.result)
-          end
+    vim.defer_fn(function()
+      if completed or not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+
+      completed = true
+      log.warn("lsp.implementation.timeout", {
+        bufnr = bufnr,
+        clients = lsp_client_names(bufnr, method),
+        elapsed_ms = vim.uv.now() - request_started_at,
+        file = vim.api.nvim_buf_get_name(bufnr),
+        retried = request_opts.retried == true,
+      })
+
+      if not request_opts.retried and vim.bo[bufnr].filetype == "go" and has_stale_gopls_client(clients) then
+        if restart_gopls_and_retry() then
+          return
         end
       end
+
+      vim.notify("LSP implementation timed out", vim.log.levels.WARN)
+    end, GOPLS_NAVIGATION_REQUEST_TIMEOUT_MS)
+
+    vim.lsp.buf_request_all(bufnr, method, params, function(results)
+      if completed then
+        log.warn("lsp.implementation.late_result", {
+          bufnr = bufnr,
+          elapsed_ms = vim.uv.now() - request_started_at,
+          file = vim.api.nvim_buf_get_name(bufnr),
+          retried = request_opts.retried == true,
+        })
+        return
+      end
+
+      completed = true
+      local locations, offset_encoding, errors = lsp_locations_from_results(results)
+
+      log.info("lsp.implementation.result", {
+        bufnr = bufnr,
+        clients = lsp_client_names(bufnr, method),
+        count = #locations,
+        elapsed_ms = vim.uv.now() - request_started_at,
+        errors = errors,
+        file = vim.api.nvim_buf_get_name(bufnr),
+        retried = request_opts.retried == true,
+      })
 
       if vim.tbl_isempty(locations) then
         if opts.fallback_to_definition then

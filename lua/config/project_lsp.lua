@@ -1,6 +1,7 @@
 local M = {}
 
 local uv = vim.uv
+local restarting_roots = {}
 
 local function normalize_path(path)
   if path == nil or path == "" then
@@ -261,14 +262,23 @@ function M.restart_go_buffer(bufnr)
     return false
   end
 
+  if restarting_roots[root] then
+    return true
+  end
+
+  restarting_roots[root] = true
   stop_gopls_for_root(root)
   vim.defer_fn(function()
-    if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
-      start_gopls_for_root(root, {
-        bufnr = bufnr,
-        reuse_client = false,
-      })
-    end
+    pcall(function()
+      if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+        start_gopls_for_root(root, {
+          bufnr = bufnr,
+          reuse_client = false,
+        })
+      end
+    end)
+
+    restarting_roots[root] = nil
   end, 150)
 
   return true
