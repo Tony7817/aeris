@@ -417,6 +417,15 @@ return {
         local log = require("config.log")
         api.map.on_attach.default(bufnr)
 
+        local workspace_placeholder_filetype = "erwin-workspace-home"
+        local auxiliary_filetypes = {
+          NvimTree = true,
+          ["erwin-terminals"] = true,
+          ["erwin-git-workspace"] = true,
+          ["erwin-git-workspace-conflicts"] = true,
+          qf = true,
+        }
+
         local function show_deleted_node(node)
           log.warn("nvim_tree.deleted_node", {
             path = node and node.absolute_path or "",
@@ -434,7 +443,70 @@ return {
           return type(path) ~= "string" or path == "" or uv.fs_stat(path) ~= nil
         end
 
-        local function open_existing_node(action)
+        local function is_workspace_placeholder(bufnr)
+          return vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].filetype == workspace_placeholder_filetype
+        end
+
+        local function is_auxiliary_buffer(bufnr)
+          if not vim.api.nvim_buf_is_valid(bufnr) then
+            return true
+          end
+
+          return vim.bo[bufnr].buftype == "terminal" or auxiliary_filetypes[vim.bo[bufnr].filetype] == true
+        end
+
+        local function is_floating_window(win)
+          local ok, config = pcall(vim.api.nvim_win_get_config, win)
+          return ok and config.relative ~= ""
+        end
+
+        local function workspace_placeholder_only_window()
+          local placeholder_win = nil
+
+          for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            if not is_floating_window(win) then
+              local win_bufnr = vim.api.nvim_win_get_buf(win)
+              if is_workspace_placeholder(win_bufnr) then
+                placeholder_win = placeholder_win or win
+              elseif not is_auxiliary_buffer(win_bufnr) then
+                return nil
+              end
+            end
+          end
+
+          return placeholder_win
+        end
+
+        local function open_in_workspace_placeholder(node)
+          if node == nil or node.nodes ~= nil then
+            return false
+          end
+
+          local path = node.absolute_path
+          if type(path) ~= "string" or path == "" or vim.fn.filereadable(path) ~= 1 then
+            return false
+          end
+
+          local placeholder_win = workspace_placeholder_only_window()
+          if placeholder_win == nil or not vim.api.nvim_win_is_valid(placeholder_win) then
+            return false
+          end
+
+          local ok_tree_lib, tree_lib = pcall(require, "nvim-tree.lib")
+          if ok_tree_lib then
+            tree_lib.target_winid = placeholder_win
+          end
+
+          log.info("nvim_tree.open_placeholder_reuse", {
+            path = path,
+            win = placeholder_win,
+          })
+          vim.api.nvim_set_current_win(placeholder_win)
+          vim.cmd("edit " .. vim.fn.fnameescape(path))
+          return true
+        end
+
+        local function open_existing_node(action, opts)
           return function()
             local node = api.tree.get_node_under_cursor()
             if not node_exists(node) then
@@ -443,6 +515,10 @@ return {
             end
 
             local ok, err = xpcall(function()
+              if opts and opts.reuse_workspace_placeholder and open_in_workspace_placeholder(node) then
+                return
+              end
+
               action(node)
             end, debug.traceback)
 
@@ -456,8 +532,8 @@ return {
           end
         end
 
-        local function map_open(lhs, action, desc)
-          vim.keymap.set("n", lhs, open_existing_node(action), {
+        local function map_open(lhs, action, desc, opts)
+          vim.keymap.set("n", lhs, open_existing_node(action, opts), {
             buffer = bufnr,
             desc = "nvim-tree: " .. desc,
             noremap = true,
@@ -499,9 +575,9 @@ return {
           desc = "Copy Directory Path",
           silent = true,
         })
-        map_open("<CR>", api.node.open.edit, "Open")
-        map_open("o", api.node.open.edit, "Open")
-        map_open("<2-LeftMouse>", api.node.open.edit, "Open")
+        map_open("<CR>", api.node.open.edit, "Open", { reuse_workspace_placeholder = true })
+        map_open("o", api.node.open.edit, "Open", { reuse_workspace_placeholder = true })
+        map_open("<2-LeftMouse>", api.node.open.edit, "Open", { reuse_workspace_placeholder = true })
         map_open("O", api.node.open.no_window_picker, "Open: No Window Picker")
         map_open("<C-e>", api.node.open.replace_tree_buffer, "Open: In Place")
         map_open("<C-t>", api.node.open.tab, "Open: New Tab")
