@@ -269,7 +269,20 @@ end
 local open_find_files
 local open_live_grep
 
-local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
+local function current_project_root()
+  local ok, config_log = pcall(require, "config.log")
+  if ok and type(config_log.project_root) == "function" then
+    return config_log.project_root()
+  end
+
+  return vim.fn.getcwd()
+end
+
+local function find_files_command()
+  return { "rg", "--files", "--no-config", "--glob", "!**/.git/**", "--color", "never" }
+end
+
+local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map, cwd)
   local actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
 
@@ -280,6 +293,7 @@ local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
       open_find_files({
         strict_case = next_strict_case,
         default_text = query,
+        cwd = cwd,
       })
     end)
   end
@@ -328,20 +342,26 @@ end
 open_find_files = function(opts)
   opts = opts or {}
   local strict_case = opts.strict_case == true
+  local cwd = opts.cwd or current_project_root()
+  local command = find_files_command()
   log.info("telescope.find_files.open", {
-    cwd = vim.fn.getcwd(),
+    cwd = cwd,
     default_text = opts.default_text,
+    find_command = command,
+    rg = vim.fn.exepath("rg"),
     strict_case = strict_case,
   })
 
   require("telescope.builtin").find_files({
-    find_command = { "rg", "--files", "--hidden", "--glob", "!**/.git/**", "--color", "never" },
+    cwd = cwd,
+    find_command = command,
     file_ignore_patterns = {},
+    hidden = true,
     case_mode = strict_case and "respect_case" or "ignore_case",
     default_text = opts.default_text,
     prompt_title = strict_case and "Find Files [Case]" or "Find Files",
     attach_mappings = function(prompt_bufnr, picker_map)
-      return attach_find_files_mappings(prompt_bufnr, strict_case, picker_map)
+      return attach_find_files_mappings(prompt_bufnr, strict_case, picker_map, cwd)
     end,
   })
 end
