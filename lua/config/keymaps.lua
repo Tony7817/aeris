@@ -278,8 +278,22 @@ local function current_project_root()
   return vim.fn.getcwd()
 end
 
+local function ripgrep_executable()
+  local homebrew_rg = "/opt/homebrew/bin/rg"
+  if vim.fn.executable(homebrew_rg) == 1 then
+    return homebrew_rg
+  end
+
+  local path_rg = vim.fn.exepath("rg")
+  if path_rg ~= "" then
+    return path_rg
+  end
+
+  return "rg"
+end
+
 local function find_files_command()
-  return { "rg", "--files", "--no-config", "--glob", "!**/.git/**", "--color", "never" }
+  return { ripgrep_executable(), "--files", "--no-config", "--glob", "!**/.git/**", "--color", "never" }
 end
 
 local function attach_find_files_mappings(prompt_bufnr, strict_case, picker_map, cwd)
@@ -348,7 +362,7 @@ open_find_files = function(opts)
     cwd = cwd,
     default_text = opts.default_text,
     find_command = command,
-    rg = vim.fn.exepath("rg"),
+    rg = ripgrep_executable(),
     strict_case = strict_case,
   })
 
@@ -414,6 +428,14 @@ open_live_grep = function(opts)
 
   require("telescope.builtin").live_grep({
     default_text = opts.default_text,
+    vimgrep_arguments = {
+      ripgrep_executable(),
+      "--color=never",
+      "--no-heading",
+      "--with-filename",
+      "--line-number",
+      "--column",
+    },
     additional_args = function()
       return { strict_case and "--case-sensitive" or "--ignore-case" }
     end,
