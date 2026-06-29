@@ -153,7 +153,6 @@ Go to definition / find references:
 ```text
 gd
 gr
-gi
 ```
 
 Jump back after navigation:
@@ -259,7 +258,7 @@ These mappings are available after an LSP client attaches to the current file.
 | `<F12>` | Prefer implementation, otherwise definition |
 | `gd` | Go to definition |
 | `gr` | Find references |
-| `gi` | Find references |
+| `gi` | Go to implementation |
 | `K` | Hover documentation |
 | `Space ds` | Document symbols |
 | `Space ca` | Code action |
