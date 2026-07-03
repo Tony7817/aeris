@@ -596,6 +596,22 @@ local function schedule_workspace_placeholder_check()
   vim.schedule(ensure_workspace_placeholder)
 end
 
+local function close_workspace_placeholders_for_file(bufnr)
+  if not is_workspace_page_buffer(bufnr) then
+    return
+  end
+
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local win_bufnr = vim.api.nvim_win_get_buf(win)
+    if is_workspace_placeholder(win_bufnr) then
+      pcall(vim.api.nvim_win_close, win, true)
+      if vim.api.nvim_buf_is_valid(win_bufnr) then
+        pcall(vim.api.nvim_buf_delete, win_bufnr, { force = true })
+      end
+    end
+  end
+end
+
 window_cwd = function(win)
   local cwd
   if vim.api.nvim_win_is_valid(win) then
@@ -2125,6 +2141,17 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout", "WinClosed" }, {
   group = group,
   callback = schedule_workspace_placeholder_check,
+})
+
+vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
+  group = group,
+  callback = function(args)
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(args.buf) then
+        close_workspace_placeholders_for_file(args.buf)
+      end
+    end)
+  end,
 })
 
 vim.api.nvim_create_autocmd("InsertLeave", {
