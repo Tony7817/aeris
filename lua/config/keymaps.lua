@@ -586,6 +586,14 @@ end
 
 map("n", "<leader>ca", vim.lsp.buf.code_action, { desc = "Code action" })
 map("n", "<leader>rn", vim.lsp.buf.rename, { desc = "Rename symbol" })
+map("n", "<leader>cr", function()
+  vim.cmd("checktime")
+  if require("config.project_lsp").restart_go_buffer(0) then
+    vim.notify("Refreshing Go LSP", vim.log.levels.INFO)
+  else
+    vim.notify("No Go LSP buffer to refresh", vim.log.levels.INFO)
+  end
+end, { desc = "Refresh Go LSP" })
 map("n", "<leader>cf", function()
   require("conform").format({
     async = true,
