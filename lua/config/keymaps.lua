@@ -476,6 +476,27 @@ local function repeat_narrow_file_tree()
   return ""
 end
 
+local function toggle_file_tree()
+  local ok, tree_api = pcall(require, "nvim-tree.api")
+  if not ok then
+    vim.cmd("NvimTreeToggle")
+    return
+  end
+
+  if tree_api.tree.is_visible() then
+    pcall(tree_api.tree.close)
+
+    if tree_api.tree.is_visible() then
+      local tree_win = tree_api.tree.winid()
+      if type(tree_win) == "number" and vim.api.nvim_win_is_valid(tree_win) then
+        pcall(vim.api.nvim_win_close, tree_win, true)
+      end
+    end
+  else
+    tree_api.tree.toggle()
+  end
+end
+
 map("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear search highlight" })
 map("n", "<leader>w", "<cmd>write<CR>", { desc = "Write buffer" })
 map("n", "<leader>q", "<cmd>quit<CR>", { desc = "Quit window" })
@@ -486,7 +507,7 @@ map("n", "C", '"_C', { desc = "Change to line end without yanking" })
 map("n", "gb", jump_back, { desc = "Jump back" })
 map("n", "<D-Left>", jump_back, { desc = "Jump back" })
 map("n", "<D-Right>", "<C-i>", { desc = "Jump forward" })
-map("n", "<leader>e", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle file tree" })
+map("n", "<leader>e", toggle_file_tree, { desc = "Toggle file tree" })
 map("n", "<leader>E", "<cmd>NvimTreeFocus<CR>", { desc = "Focus file tree" })
 map("n", "<leader>]", widen_file_tree, { desc = "Widen file tree", nowait = true })
 map("n", "<leader>[", narrow_file_tree, { desc = "Narrow file tree", nowait = true })

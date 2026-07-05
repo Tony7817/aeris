@@ -542,6 +542,30 @@ return {
           })
         end
 
+        local function close_tree()
+          local close_ok, close_err = pcall(api.tree.close)
+          if close_ok and not api.tree.is_visible() then
+            return
+          end
+
+          local tree_win = api.tree.winid()
+          local fallback_ok, fallback_err = nil, nil
+          if type(tree_win) == "number" and vim.api.nvim_win_is_valid(tree_win) then
+            fallback_ok, fallback_err = pcall(vim.api.nvim_win_close, tree_win, true)
+            if fallback_ok then
+              return
+            end
+          end
+
+          log.error("nvim_tree.close_error", {
+            close_error = close_err,
+            fallback_error = fallback_err,
+            visible = api.tree.is_visible(),
+            win = tree_win,
+          })
+          vim.notify("nvim-tree close failed; see :AerisLog", vim.log.levels.ERROR)
+        end
+
         local function copy_directory_path()
           local node = api.tree.get_node_under_cursor()
           local path = node.absolute_path
@@ -577,6 +601,18 @@ return {
         })
         map_open("<CR>", api.node.open.edit, "Open", { reuse_workspace_placeholder = true })
         map_open("o", api.node.open.edit, "Open", { reuse_workspace_placeholder = true })
+        vim.keymap.set("n", "q", close_tree, {
+          buffer = bufnr,
+          desc = "nvim-tree: Close",
+          silent = true,
+          nowait = true,
+        })
+        vim.keymap.set("n", "<leader>e", close_tree, {
+          buffer = bufnr,
+          desc = "nvim-tree: Close",
+          silent = true,
+          nowait = true,
+        })
         map_open("<2-LeftMouse>", api.node.open.edit, "Open", { reuse_workspace_placeholder = true })
         map_open("O", api.node.open.no_window_picker, "Open: No Window Picker")
         map_open("<C-e>", api.node.open.replace_tree_buffer, "Open: In Place")
