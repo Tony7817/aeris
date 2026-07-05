@@ -544,7 +544,7 @@ local function create_content_window_after_tree()
   end
 
   local current_win = vim.api.nvim_get_current_win()
-  local tree_width = vim.api.nvim_win_get_width(tree_win)
+  local tree_width = require("config.tree_width").get()
   vim.api.nvim_set_current_win(tree_win)
   vim.cmd("rightbelow vertical new")
 

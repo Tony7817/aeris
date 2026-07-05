@@ -589,7 +589,7 @@ return {
       actions = {
         open_file = {
           quit_on_open = false,
-          resize_window = false,
+          resize_window = true,
         },
         remove_file = {
           close_window = false,
