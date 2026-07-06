@@ -38,6 +38,7 @@ local state = {
 
 local group = api.nvim_create_augroup("erwin_git_workspace", { clear = true })
 local diff_namespace = api.nvim_create_namespace("erwin_git_workspace_diff")
+local sidebar_view_locking = false
 local close_extra_main_windows
 local configure_main_window
 local current_branch
@@ -1400,6 +1401,26 @@ local function window_call(win, callback)
   return result
 end
 
+local function keep_sidebar_left_aligned()
+  if sidebar_view_locking or not is_valid_win(state.sidebar_win) then
+    return
+  end
+
+  sidebar_view_locking = true
+  pcall(api.nvim_win_call, state.sidebar_win, function()
+    local cursor = api.nvim_win_get_cursor(state.sidebar_win)
+    if cursor[2] ~= 0 then
+      pcall(api.nvim_win_set_cursor, state.sidebar_win, { cursor[1], 0 })
+    end
+
+    local view = vim.fn.winsaveview()
+    if view.leftcol ~= 0 then
+      vim.fn.winrestview({ leftcol = 0 })
+    end
+  end)
+  sidebar_view_locking = false
+end
+
 local function create_scratch_buffer(name, lines, file_path, modifiable)
   local buf = api.nvim_create_buf(false, true)
 
@@ -1740,6 +1761,11 @@ local function ensure_sidebar_buf()
     group = group,
     buffer = buf,
     callback = function()
+      if sidebar_view_locking then
+        return
+      end
+
+      keep_sidebar_left_aligned()
       if state.sidebar_preview_suspended then
         return
       end
@@ -1758,6 +1784,7 @@ local function configure_sidebar_window(win)
   vim.wo[win].relativenumber = false
   vim.wo[win].signcolumn = "no"
   vim.wo[win].spell = false
+  vim.wo[win].sidescrolloff = 0
   vim.wo[win].winfixwidth = true
   vim.wo[win].wrap = false
   vim.wo[win].winblend = 0
@@ -1906,6 +1933,8 @@ local function attach_sidebar()
 
   if is_valid_win(state.sidebar_win) then
     api.nvim_win_set_buf(state.sidebar_win, buf)
+    configure_sidebar_window(state.sidebar_win)
+    keep_sidebar_left_aligned()
     return
   end
 
@@ -1917,6 +1946,7 @@ local function attach_sidebar()
   })
 
   configure_sidebar_window(state.sidebar_win)
+  keep_sidebar_left_aligned()
 end
 
 current_sidebar_item = function()
