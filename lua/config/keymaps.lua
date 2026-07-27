@@ -446,6 +446,22 @@ open_live_grep = function(opts)
   })
 end
 
+local function search_visual_selection()
+  local region = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), {
+    type = vim.fn.mode(),
+  })
+  local selection = table.concat(region, "\n")
+  if selection == "" then
+    return
+  end
+
+  local pattern = "\\V" .. vim.fn.escape(selection, "\\"):gsub("\n", "\\n")
+  vim.fn.setreg("/", pattern)
+  vim.o.hlsearch = true
+  vim.cmd.normal({ args = { vim.keycode("<Esc>") }, bang = true })
+  vim.fn.search(pattern)
+end
+
 local function widen_file_tree()
   local tree_width = require("config.tree_width")
   tree_width.widen_with_repeat()
@@ -504,6 +520,7 @@ map("n", "<leader>Q", "<cmd>qa!<CR>", { desc = "Quit all" })
 map("n", "c", '"_c', { desc = "Change without yanking" })
 map("x", "c", '"_c', { desc = "Change selection without yanking" })
 map("n", "C", '"_C', { desc = "Change to line end without yanking" })
+map("x", "*", search_visual_selection, { desc = "Search selected text" })
 map("n", "gb", jump_back, { desc = "Jump back" })
 map("n", "<D-Left>", jump_back, { desc = "Jump back" })
 map("n", "<D-Right>", "<C-i>", { desc = "Jump forward" })
