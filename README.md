@@ -54,36 +54,30 @@ Recommended for language tooling:
 
 ## Installation
 
-### Step 0: install the recommended Nerd Font
+Supports macOS / Linux with [Homebrew](https://brew.sh) installed. Run one command from the cloned directory:
 
-For Homebrew users on macOS or Linux:
+```bash
+git clone https://github.com/Tony7817/aeris.git Aeris
+cd Aeris
+./bin/install.sh
+```
+
+The script will:
+
+1. Install missing system dependencies: Neovim (at least 0.12), Git, ripgrep, Node.js / npm, Python3, Go, tree-sitter CLI, curl, and unzip.
+2. Check build tools, including a C compiler and make. If missing, run `xcode-select --install` on macOS, or install your distribution's C compiler and make on Linux, then rerun the script.
+3. Back up existing config and link this repo to `${XDG_CONFIG_HOME:-~/.config}/nvim`. A clone already at that path is used in place.
+4. Wait for plugins, Mason language tools, and Treesitter parsers to finish installing. Failures return a nonzero exit status; fix the network or environment and rerun.
+
+Rerun the script to install missing dependencies. Existing system tools are left alone, except Neovim below 0.12, which the script attempts to upgrade through Homebrew.
+
+Install an icon font separately and select it in your terminal settings. On macOS:
 
 ```bash
 brew install --cask font-jetbrains-mono-nerd-font
 ```
 
-Then set your terminal font to `JetBrainsMono Nerd Font` or `JetBrainsMono Nerd Font Mono`.
-
-### Option 1: clone directly into `~/.config/nvim`
-
-```bash
-git clone https://github.com/Tony7817/aeris.git ~/.config/nvim
-nvim
-```
-
-### Option 2: clone elsewhere and symlink to `~/.config/nvim`
-
-```bash
-git clone https://github.com/Tony7817/aeris.git ~/Code/Aeris
-cd ~/Code/Aeris
-./bin/install.sh
-nvim
-```
-
-`bin/install.sh` will:
-
-- back up an existing `~/.config/nvim`
-- symlink the current repo to `~/.config/nvim`
+Set your terminal font to `JetBrainsMono Nerd Font` or `JetBrainsMono Nerd Font Mono`.
 
 ## First Launch
 
